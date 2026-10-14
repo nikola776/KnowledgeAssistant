@@ -1,0 +1,16 @@
+# Code and docs only. The corpus, screenshots and OCR text are internal support
+# material and the screenshots are unredacted, so none of it is versioned.
+/*
+!/.gitignore
+!/README.md
+!/CLAUDE.md
+!/ios-assistant-system-prompt.md
+!/pipeline/
+!/04-ocr-benchmark/
+/04-ocr-benchmark/*
+!/04-ocr-benchmark/README.md
+!/04-ocr-benchmark/report.md
+!/04-ocr-benchmark/ground-truth/
+/04-ocr-benchmark/ground-truth/*
+!/04-ocr-benchmark/ground-truth/README.md
+__pycache__/
