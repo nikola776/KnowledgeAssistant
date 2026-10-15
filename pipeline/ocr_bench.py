@@ -6,12 +6,14 @@ hand-checked ground truth.
 Each run writes 04-ocr-benchmark/<run>/ocr.json in the same shape as
 01-ocr/ocr.json, so any run can stand in for the Windows output in normalise.py.
 Rows carry two extra fields: `segments`, the engine's own units (Tesseract words,
-EasyOCR phrases) with a 0-1 confidence and a line number, and `seconds`.
-Windows.Media.Ocr reports no confidence, so the baseline has no segments.
+EasyOCR phrases, Unlimited-OCR lines) with a 0-1 confidence where the engine
+reports one and a line number, and `seconds`. Windows.Media.Ocr reports no
+confidence, so the baseline has no segments.
 
-Everything runs on-device. Neither engine can be installed on the
+Everything runs on-device. None of the engines can be installed on the
 ThreatLocker-managed Windows machine, so this is a benchmark, not a pipeline
-stage: run it wherever tesseract (binary on PATH) or easyocr (pip, PyTorch) is.
+stage: run it wherever tesseract (binary on PATH), easyocr (pip, PyTorch) or
+Unlimited-OCR (CUDA GPU, pipeline/requirements-unlimited-ocr.txt) is.
 
 Ground truth: 04-ocr-benchmark/ground-truth/<doc_id>/<image basename>.txt, one
 on-screen line per line, in logical reading order. An empty file means the image
@@ -21,10 +23,12 @@ Run:
   python pipeline/ocr_bench.py run tesseract
   python pipeline/ocr_bench.py run tesseract --psm 11 --scale 2
   python pipeline/ocr_bench.py run easyocr
+  python pipeline/ocr_bench.py run unlimited-ocr --mode gundam
   python pipeline/ocr_bench.py compare
 """
 
 import argparse
+import html
 import io
 import json
 import os
@@ -68,7 +72,8 @@ def join_lines(segments, min_conf=0.0):
     """Rebuild text from segments, one line per line number, dropping low-confidence ones."""
     lines = {}
     for s in segments:
-        if s["conf"] >= min_conf and s["text"].strip():
+        # conf is None for engines that report none; nothing to filter on.
+        if (s["conf"] is None or s["conf"] >= min_conf) and s["text"].strip():
             lines.setdefault(s["line"], []).append(s["text"].strip())
     return "\n".join(" ".join(lines[n]) for n in sorted(lines))
 
@@ -84,7 +89,9 @@ def make_row(doc_id, path, segments, seconds):
         "chars": len(text),
         "text": text,
         "seconds": round(seconds, 2),
-        "segments": [{"text": s["text"], "conf": round(s["conf"], 3), "line": s["line"]}
+        "segments": [{"text": s["text"],
+                      "conf": None if s["conf"] is None else round(s["conf"], 3),
+                      "line": s["line"]}
                      for s in segments],
     }
 
@@ -175,6 +182,74 @@ def group_lines(dets):
     return segs
 
 
+def unlimited_ocr_engine(mode, model_name, revision):
+    """baidu/Unlimited-OCR, a 3B vision-language model derived from DeepSeek-OCR.
+
+    Its infer() calls .cuda() directly throughout, so this needs an NVIDIA GPU.
+    It reports no confidence: segments are its output lines with conf None.
+    Returns (run, workers, version) since the version depends on the loaded model.
+    """
+    import tempfile
+
+    import torch
+    import transformers
+    from transformers import AutoModel, AutoTokenizer
+
+    if not torch.cuda.is_available():
+        raise SystemExit("unlimited-ocr needs a CUDA GPU: its infer() calls .cuda() directly")
+
+    # trust_remote_code runs Python from the model repo. Pin --revision to the
+    # commit whose code was reviewed, so a later push to the repo cannot change it.
+    kw = dict(trust_remote_code=True, revision=revision)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, **kw)
+    model = AutoModel.from_pretrained(model_name, use_safetensors=True,
+                                      torch_dtype=torch.bfloat16, **kw)
+    model = model.eval().cuda()
+
+    # The model card's two single-image configurations. gundam tiles the image
+    # into 640px crops plus a 1024px overview, which suits small UI text.
+    sizes = {"gundam": dict(base_size=1024, image_size=640, crop_mode=True),
+             "base": dict(base_size=1024, image_size=1024, crop_mode=False)}[mode]
+    scratch = tempfile.mkdtemp(prefix="unlimited_ocr_")  # infer() creates it even when not saving
+
+    def run(path):
+        # eval_mode returns the text. save_results stays off: that path calls
+        # eval() on the generated text to draw boxes, executing whatever the model wrote.
+        raw = model.infer(tokenizer, prompt="<image>document parsing.", image_file=path,
+                          output_path=scratch, max_length=32768, no_repeat_ngram_size=35,
+                          ngram_window=128, eval_mode=True, save_results=False, **sizes)
+        lines = plain_text(raw or "").splitlines()
+        segs = [{"text": line, "conf": None, "line": n} for n, line in enumerate(lines)]
+        return segs, {"raw": raw}
+
+    commit = getattr(model.config, "_commit_hash", None) or revision or "main"
+    version = (f"{model_name}@{commit[:12]} (transformers {transformers.__version__}, "
+               f"{torch.cuda.get_device_name()})")
+    return run, 1, version
+
+
+# Unlimited-OCR answers in markdown, with <|det|>type[bbox]<|/det|> grounding
+# markers and HTML for tables. The other engines return plain text, so reduce
+# it to the words a reader would see before comparing.
+GROUNDING = re.compile(r"<\|(ref|det)\|>.*?<\|/\1\|>", re.S)
+
+
+def plain_text(md):
+    t = GROUNDING.sub("\n", md)
+    t = re.sub(r"<br\s*/?>|</(?:tr|p|div|li|h\d)>", "\n", t, flags=re.I)
+    t = html.unescape(re.sub(r"<[^>]+>", " ", t))
+    out = []
+    for line in t.splitlines():
+        line = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)  # image placeholders
+        if re.fullmatch(r"[\s|:\-]*", line):  # blank, or a markdown table rule
+            continue
+        line = re.sub(r"^\s*(#+|[-*+])\s+", "", line)  # headings, bullets
+        line = " ".join(line.replace("**", "").replace("|", " ").split())
+        if line:
+            out.append(line)
+    return "\n".join(out)
+
+
 def cmd_run(args):
     if args.engine == "tesseract":
         run, workers = tesseract_engine(args.psm, args.scale)
@@ -183,12 +258,16 @@ def cmd_run(args):
         settings = {"psm": args.psm, "scale": args.scale}
         default = ("tesseract" + (f"-psm{args.psm}" if args.psm != 3 else "")
                    + (f"-x{args.scale:g}" if args.scale != 1 else ""))
-    else:
+    elif args.engine == "easyocr":
         run, workers = easyocr_engine(args.gpu)
         import easyocr
         version = f"easyocr {easyocr.__version__}"
         settings = {"gpu": args.gpu}
         default = "easyocr"
+    else:
+        run, workers, version = unlimited_ocr_engine(args.mode, args.model, args.revision)
+        settings = {"mode": args.mode, "model": args.model, "revision": args.revision}
+        default = "unlimited-ocr" + ("-base" if args.mode == "base" else "")
     name = args.name or default
     images = list_images()
     print(f"{version}: {len(images)} images -> 04-ocr-benchmark/{name}\n")
@@ -197,7 +276,12 @@ def cmd_run(args):
         doc_id, path = item
         t = time.time()
         try:
-            return make_row(doc_id, path, run(path), time.time() - t)
+            # An engine may return (segments, extra fields for the row), e.g. raw output.
+            result = run(path)
+            segs, extra = result if isinstance(result, tuple) else (result, {})
+            row = make_row(doc_id, path, segs, time.time() - t)
+            row.update(extra)
+            return row
         except Exception as e:  # keep going, as ocr.ps1 does; the row records why
             row = make_row(doc_id, path, [], time.time() - t)
             row["error"] = str(e)
@@ -348,7 +432,9 @@ def cmd_compare(args):
     variants = []
     for name, (rows, meta) in runs.items():
         variants.append((name, rows, meta, 0.0))
-        if args.min_conf and any("segments" in r for r in rows.values()):
+        has_conf = any(s["conf"] is not None
+                       for r in rows.values() for s in r.get("segments", []))
+        if args.min_conf and has_conf:
             variants.append((f"{name} conf>={args.min_conf:g}", rows, meta, args.min_conf))
 
     head = ["run", "chars", f"images >={OCR_MIN_CHARS} chars", "word overlap with windows",
@@ -403,12 +489,18 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="OCR every screenshot with one engine")
-    r.add_argument("engine", choices=["tesseract", "easyocr"])
+    r.add_argument("engine", choices=["tesseract", "easyocr", "unlimited-ocr"])
     r.add_argument("--psm", type=int, default=3,
                    help="tesseract page segmentation mode (11 = sparse text)")
     r.add_argument("--scale", type=float, default=1,
                    help="tesseract: upscale images by this factor first (needs Pillow)")
     r.add_argument("--gpu", action="store_true", help="easyocr: use CUDA")
+    r.add_argument("--mode", choices=["gundam", "base"], default="gundam",
+                   help="unlimited-ocr: gundam tiles into 640px crops, base reads at 1024px")
+    r.add_argument("--model", default="baidu/Unlimited-OCR",
+                   help="unlimited-ocr: Hugging Face id or a local copy of the repo")
+    r.add_argument("--revision",
+                   help="unlimited-ocr: model repo commit to load (pin the reviewed one)")
     r.add_argument("--name", help="output folder under 04-ocr-benchmark "
                                   "(default: engine plus non-default options)")
 

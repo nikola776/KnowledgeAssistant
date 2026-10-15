@@ -1,0 +1,15 @@
+# baidu/Unlimited-OCR for `python pipeline/ocr_bench.py run unlimited-ocr`.
+# Versions from the model card, which was tested on Python 3.12 + CUDA 12.9.
+# Install into its own environment: transformers 4.57 is far newer than the
+# rest of this project expects. Needs an NVIDIA GPU.
+torch==2.10.0
+torchvision==0.25.0
+transformers==4.57.1
+Pillow==12.1.1
+safetensors
+einops
+addict
+easydict
+matplotlib
+tqdm
+requests
