@@ -125,9 +125,33 @@ See `report.md` for the current table.
   of them: small, low-resolution dialogs (Unite sign-in, Communicate case screens) and the
   label on a scanner. Only sol-403 obj0017 and obj0053 are truly blank. Use those two as
   the blank images in `ground-truth/`.
-- Unlimited-OCR (`base` mode) reads small screens cleanly and in logical order, but takes
-  20 s to 3.5 min per image on the RTX 2080 server.
-- None of this measures accuracy yet.
+- Unlimited-OCR (`base` mode) reads small screens cleanly and in logical order, but took
+  67 min for the set on the RTX 2080 (median 33 s per image). Two dense NVIDIA panels
+  (sol-386 obj0019, obj0021) looped until the 4096-token cap, at 10 min each.
+
+## First accuracy scores (2026-10-15, 16 labelled screenshots)
+
+From `ocr_review.py`, against the first 16 screenshots marked done: the easier ones, two
+of them blank. Word precision is how many words an engine read are right; recall is how
+many words on screen it found.
+
+| Engine | Word precision | Word recall | CER |
+|---|---|---|---|
+| Azure prebuilt-read | 98% | 99% | 1% |
+| Unlimited-OCR base | 92% | 83% | 24% |
+| Windows | 97% | 81% | 32% |
+| Tesseract x2 | 87% | 77% | 31% |
+| EasyOCR | 90% | 76% | 35% |
+
+- **Azure's row is inflated by construction.** The ground truth starts from Azure's text and
+  only its unsure words were checked, so any confident Azure mistake counts as correct, and
+  its line order is the reference (hence a 1% CER). Read it as "very good", not 98/99.
+- **Windows is precise but misses a fifth of the words**, even on the easy screens. The
+  blurry screenshots still to be labelled are where it found nothing, so its recall will fall.
+- Unlimited-OCR finds slightly more than Windows but makes more mistakes, at roughly 100x
+  Azure's time on this GPU. Tesseract and EasyOCR trail on both measures.
+- CER and WER penalise reading order, which differs by engine on multi-column screens; word
+  precision and recall ignore order and are the fairer comparison.
 
 ## Data handling
 
