@@ -23,10 +23,10 @@ unless you change it:
   bottom helps you spot it.
 - **Done — next** writes this folder's file for that screenshot. Reopen removes it again.
 
-Edits save as you go into `../review.json`, so you can stop and come back. The 20
-screenshots are listed in `SAMPLE` in `pipeline/ocr_review.py`: every kind of screen,
-weighted toward the hard ones, plus the only two images with no text (sol-403 obj0017
-and obj0053).
+Edits save as you go into `../review.json`, so you can stop and come back. The page holds
+all 67 screenshots; Prev, Next and Done skip finished ones, and the dropdown groups them
+into To do and Done so a finished one can be reopened. Two images have no text at all
+(sol-403 obj0017 and obj0053): mark them done empty.
 
 **The trade-off:** starting from Azure is far quicker than typing, but an Azure mistake you
 miss counts as correct, and Azure's line order becomes the reference. Word precision and

@@ -1,5 +1,5 @@
 """
-OCR review: correct Azure's reading of a sample of screenshots in the browser and
+OCR review: correct Azure's reading of the screenshots in the browser and
 save the result as ground truth for `ocr_bench.py compare`.
 
 Every word Azure read starts out correct. Click a wrong word to fix or delete it,
@@ -26,7 +26,7 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ocr_bench import BASELINE, BENCH, IMAGES, join_lines, load_rows, write_json
+from ocr_bench import BASELINE, BENCH, IMAGES, join_lines, list_images, load_rows, write_json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "ocr_review.html")
@@ -40,30 +40,10 @@ BASE_RUN = "azure-read"
 HINT_RUNS = [("Windows", None, 0), ("EasyOCR", "easyocr", 0.5),
              ("Tesseract x2", "tesseract-x2", 0.5), ("Unlimited-OCR", "unlimited-ocr-base", 0)]
 
-# 20 screenshots covering every kind of screen in the corpus, weighted toward the
-# hard ones, plus the only two images with no text at all.
-SAMPLE = [
-    ("sol-386", "obj0016_682x583.png"),    # NVIDIA panel, small and dense
-    ("sol-386", "obj0018_1243x807.png"),   # NVIDIA panel
-    ("sol-386", "obj0015_1742x1090.png"),  # NVIDIA, large with little text
-    ("sol-402", "obj0019_1915x1002.png"),  # training material, full-width page
-    ("sol-406", "obj0019_1895x1017.png"),  # Unite settings
-    ("sol-412", "obj0019_1201x735.png"),   # Unite, add a scanner
-    ("sol-441", "obj0022_230x274.png"),    # Windows sign-in dialog, tiny
-    ("sol-441", "obj0056_320x262.png"),    # Unite sign-in, small
-    ("sol-384", "obj0022_828x711.png"),    # 3Shape Communicate sign-in
-    ("sol-396", "obj0022_945x646.png"),    # 3Shape account
-    ("sol-411", "obj0020_1908x530.png"),   # 3Shape account email
-    ("sol-392", "obj0024_874x411.png"),    # training booking
-    ("sol-391", "obj0022_816x433.png"),    # blurry case list
-    ("sol-395", "obj0016_920x307.png"),    # blurry Communicate case list
-    ("sol-403", "obj0018_946x414.png"),    # blurry scanner management
-    ("sol-403", "obj0051_993x454.png"),    # blurry calibration screen
-    ("sol-403", "obj0054_654x503.png"),    # clean calibration screen
-    ("sol-393", "obj0019_1901x868.png"),   # dummy lab approval
-    ("sol-403", "obj0017_804x523.png"),    # no text
-    ("sol-403", "obj0053_601x343.png"),    # no text
-]
+# Every screenshot in the corpus. The page skips the ones already done, so the
+# first 20-image sample (the easy ones went first) carries straight on.
+ALL = [(doc_id, os.path.basename(path)) for doc_id, path in list_images()]
+KNOWN = set(ALL)
 
 lock = threading.Lock()
 
@@ -88,7 +68,7 @@ def items():
     hints = [(label, run_rows(name), mc) for label, name, mc in HINT_RUNS]
     review = load_review()
     out = []
-    for key in SAMPLE:
+    for key in ALL:
         lines, confs, boxes = {}, {}, {}
         for s in base[key]["segments"]:
             lines.setdefault(s["line"], []).append(s["text"])
@@ -159,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, json.dumps(items()).encode(), "application/json")
         if self.path.startswith("/img/"):
             key = tuple(self.path[len("/img/"):].split("/"))
-            if key in SAMPLE:  # only sample images, so no path tricks reach the disk
+            if key in KNOWN:  # only corpus screenshots, so no path tricks reach the disk
                 with open(os.path.join(IMAGES, *key), "rb") as fh:
                     return self.send(200, fh.read(), "image/png")
         self.send(404, b"not found", "text/plain")
@@ -168,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/api/review":
             return self.send(404, b"not found", "text/plain")
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        if tuple(body["id"].split("/")) not in SAMPLE:
+        if tuple(body["id"].split("/")) not in KNOWN:
             return self.send(400, b"unknown image", "text/plain")
         save(body["id"], body["review"])
         self.send(200, b"{}", "application/json")

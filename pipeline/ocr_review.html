@@ -91,9 +91,9 @@
 <header>
   <h1>OCR review</h1>
   <span id="progress"></span>
-  <button id="prev" title="Previous (←)">‹ Prev</button>
+  <button id="prev" title="Previous unfinished (←)">‹ Prev</button>
   <select id="picker" aria-label="Screenshot"></select>
-  <button id="next" title="Next (→)">Next ›</button>
+  <button id="next" title="Next unfinished (→)">Next ›</button>
   <span id="status"></span>
 </header>
 
@@ -186,8 +186,12 @@ function show(i) {
 function renderNav() {
   const done = items.filter(it => it.review.done).length;
   $('#progress').textContent = `${done} / ${items.length} done`;
-  const sel = $('#picker'); sel.replaceChildren();
-  items.forEach((it, j) => sel.add(new Option(`${it.review.done ? '✓' : '○'} ${j + 1}. ${it.id}`, j)));
+  const sel = $('#picker'), todo = el('optgroup'), fin = el('optgroup');
+  todo.label = `To do (${items.length - done})`;
+  fin.label = `Done (${done})`;
+  items.forEach((it, j) =>
+    (it.review.done ? fin : todo).append(new Option(`${it.review.done ? '✓' : '○'} ${j + 1}. ${it.id}`, j)));
+  sel.replaceChildren(todo, fin);
   sel.value = idx;
   const r = items[idx].review;
   $('#done').textContent = r.done ? 'Done ✓ — next' : 'Done — next';
@@ -346,6 +350,17 @@ async function save(it) {
   }
 }
 
+// The next screenshot in direction dir (+1/-1) that is not done yet, so finished
+// ones are skipped; once everything is done, a plain step.
+function step(dir) {
+  const n = items.length;
+  for (let k = 1; k <= n; k++) {
+    const j = (((idx + dir * k) % n) + n) % n;
+    if (!items[j].review.done) return j;
+  }
+  return (((idx + dir) % n) + n) % n;
+}
+
 async function leave(target) {
   if (timer) await save(items[idx]);
   show(target);
@@ -355,8 +370,8 @@ $('#missing').oninput = () => { items[idx].review.missing = $('#missing').value;
 $('#img').onclick = () => $('#stage').classList.toggle('actual');
 $('#img').onload = drawBoxes;
 $('#missing').onfocus = () => setActive(null);
-$('#prev').onclick = () => leave(idx - 1);
-$('#next').onclick = () => leave(idx + 1);
+$('#prev').onclick = () => leave(step(-1));
+$('#next').onclick = () => leave(step(1));
 $('#picker').onchange = e => leave(+e.target.value);
 $('#back').onclick = () => show(idx);
 $('#undone').onclick = async () => {
@@ -377,8 +392,8 @@ window.addEventListener('beforeunload', () => {
 });
 document.addEventListener('keydown', e => {
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-  if (e.key === 'ArrowRight') leave(idx + 1);
-  if (e.key === 'ArrowLeft') leave(idx - 1);
+  if (e.key === 'ArrowRight') leave(step(1));
+  if (e.key === 'ArrowLeft') leave(step(-1));
 });
 
 load();
