@@ -193,7 +193,7 @@ def group_lines(dets):
     return segs
 
 
-def unlimited_ocr_engine(mode, model_name, revision, gpu_memory=None):
+def unlimited_ocr_engine(mode, model_name, revision, gpu_memory=None, max_tokens=4096):
     """baidu/Unlimited-OCR, a 3B vision-language model derived from DeepSeek-OCR.
 
     Its infer() calls .cuda() directly throughout, so this needs an NVIDIA GPU.
@@ -227,6 +227,12 @@ def unlimited_ocr_engine(mode, model_name, revision, gpu_memory=None):
                                           dtype=torch.bfloat16, **kw)
         model = model.eval().cuda()
 
+    # generation_config.json sets max_new_tokens=32768 for long multi-page
+    # documents, and it overrides infer()'s max_length. A screenshot needs a few
+    # hundred tokens; when the model falls into a loop instead, the cap is what
+    # stops one image running for hours (seen on sol-386 at 35+ minutes).
+    model.generation_config.max_new_tokens = max_tokens
+
     # The model card's two single-image configurations. gundam tiles the image
     # into 640px crops plus a 1024px overview, which suits small UI text.
     sizes = {"gundam": dict(base_size=1024, image_size=640, crop_mode=True),
@@ -237,7 +243,7 @@ def unlimited_ocr_engine(mode, model_name, revision, gpu_memory=None):
         # eval_mode returns the text. save_results stays off: that path calls
         # eval() on the generated text to draw boxes, executing whatever the model wrote.
         raw = model.infer(tokenizer, prompt="<image>document parsing.", image_file=path,
-                          output_path=scratch, max_length=32768, no_repeat_ngram_size=35,
+                          output_path=scratch, max_length=max_tokens, no_repeat_ngram_size=35,
                           ngram_window=128, eval_mode=True, save_results=False, **sizes)
         lines = plain_text(raw or "").splitlines()
         segs = [{"text": line, "conf": None, "line": n} for n, line in enumerate(lines)]
@@ -387,9 +393,9 @@ def cmd_run(args):
         default = "azure-" + args.di_model.replace("prebuilt-", "")
     else:
         run, workers, version = unlimited_ocr_engine(args.mode, args.model, args.revision,
-                                                     args.gpu_memory)
+                                                     args.gpu_memory, args.max_tokens)
         settings = {"mode": args.mode, "model": args.model, "revision": args.revision,
-                    "gpu_memory": args.gpu_memory}
+                    "gpu_memory": args.gpu_memory, "max_tokens": args.max_tokens}
         default = "unlimited-ocr" + ("-base" if args.mode == "base" else "")
     name = args.name or default
     images = list_images()[:args.limit]
@@ -629,6 +635,8 @@ def main():
                    help="unlimited-ocr: Hugging Face id or a local copy of the repo")
     r.add_argument("--revision",
                    help="unlimited-ocr: model repo commit to load (pin the reviewed one)")
+    r.add_argument("--max-tokens", type=int, default=4096,
+                   help="unlimited-ocr: cap on generated tokens per image (model default 32768)")
     r.add_argument("--di-model", default="prebuilt-read",
                    help="azure: prebuilt-read (OCR) or prebuilt-layout (adds reading order, tables)")
     r.add_argument("--gpu-memory",

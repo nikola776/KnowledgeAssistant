@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCR review</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --fg: #1d2330; --muted: #677085; --line: #dde1e8;
+    --accent: #2a62d4; --accent-fg: #fff; --hover: #e8eefc;
+    --bad: #c93b3b; --bad-bg: #fbeaea; --good: #1f7a45; --good-bg: #e6f4ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d; --panel: #1c2028; --fg: #e4e7ee; --muted: #959db0; --line: #2e3440;
+      --accent: #6f9bf2; --accent-fg: #0d1117; --hover: #26324a;
+      --bad: #f07c7c; --bad-bg: #3a2224; --good: #6fd29a; --good-bg: #1d3328;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; display: flex; gap: 12px; align-items: center;
+           flex-wrap: wrap; padding: 10px 16px; background: var(--panel);
+           border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  #progress { color: var(--muted); }
+  #status { margin-left: auto; color: var(--muted); font-size: 13px; }
+  select, button, textarea, input { font: inherit; color: inherit; }
+  select { max-width: 340px; padding: 4px 6px; background: var(--panel);
+           border: 1px solid var(--line); border-radius: 6px; }
+  button { padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px;
+           background: var(--panel); cursor: pointer; }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px;
+         padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  #imgbox { position: sticky; top: 64px; max-height: calc(100vh - 80px); overflow: auto; }
+  #img { display: block; width: 100%; cursor: zoom-in; image-rendering: auto; }
+  #img.actual { width: auto; max-width: none; cursor: zoom-out; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  #title { font-weight: 600; margin: 0 0 4px; word-break: break-all; }
+  #lines { margin: 8px 0 16px; }
+  .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; padding: 3px 0;
+          border-bottom: 1px dashed var(--line); }
+  .line.struck .w { text-decoration: line-through; color: var(--bad); opacity: .7; }
+  .w { padding: 1px 4px; border-radius: 4px; cursor: pointer; }
+  .w:hover { background: var(--hover); }
+  .w.deleted { color: var(--bad); background: var(--bad-bg); text-decoration: line-through; }
+  .w.fixed { background: var(--good-bg); color: var(--good); font-weight: 600; }
+  .w.fixed s { color: var(--bad); font-weight: 400; margin-right: 4px; }
+  .wedit { padding: 1px 4px; border: 2px solid var(--accent); border-radius: 4px;
+           background: var(--panel); min-width: 4ch; }
+  .strike { margin-left: auto; padding: 0 8px; font-size: 12px; color: var(--muted);
+            border-color: transparent; }
+  .line:hover .strike { border-color: var(--line); }
+  .empty { color: var(--muted); font-style: italic; }
+  label { font-weight: 600; display: block; margin-bottom: 4px; }
+  textarea { width: 100%; min-height: 70px; padding: 8px; border: 1px solid var(--line);
+             border-radius: 6px; background: var(--panel); }
+  .actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--muted); }
+  details h4 { margin: 10px 0 2px; font-size: 13px; }
+  details pre { margin: 0; padding: 6px 8px; white-space: pre-wrap; font-size: 12.5px;
+                background: var(--bg); border-radius: 6px; max-height: 180px; overflow: auto; }
+  #finished { text-align: center; padding: 40px 16px; }
+  kbd { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OCR review</h1>
+  <span id="progress"></span>
+  <button id="prev" title="Previous (←)">‹ Prev</button>
+  <select id="picker" aria-label="Screenshot"></select>
+  <button id="next" title="Next (→)">Next ›</button>
+  <span id="status"></span>
+</header>
+
+<main id="main">
+  <section class="panel" id="imgbox">
+    <p class="hint">Click the image to switch between fit-to-width and actual pixels.</p>
+    <img id="img" alt="Screenshot being reviewed">
+  </section>
+
+  <section class="panel">
+    <p id="title"></p>
+    <p class="hint">
+      This is what Azure read. Every word counts as correct unless you change it.
+      <b>Click a wrong word</b> to type the right one (<kbd>Enter</kbd> saves, <kbd>Esc</kbd> cancels,
+      empty deletes it). <b>✕</b> strikes a line that isn't on the screen.
+    </p>
+    <div id="lines"></div>
+
+    <label for="missing">Missing words</label>
+    <p class="hint">Text on the screen that Azure didn't read at all. One line per on-screen line.</p>
+    <textarea id="missing" placeholder="e.g. Disconnect"></textarea>
+
+    <div class="actions">
+      <button class="primary" id="done">Done — next</button>
+      <button id="undone" hidden>Reopen (not done)</button>
+    </div>
+
+    <details>
+      <summary>What other engines read (to spot missed words)</summary>
+      <div id="hints"></div>
+    </details>
+  </section>
+</main>
+
+<section class="panel" id="finished" hidden>
+  <h2>All screenshots reviewed</h2>
+  <p>The ground truth is saved. To score every engine against it, run:</p>
+  <pre>python pipeline/ocr_bench.py compare</pre>
+  <button id="back">Back to the screenshots</button>
+</section>
+
+<script>
+const $ = s => document.querySelector(s);
+let items = [], idx = 0, timer = null;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+async function load() {
+  items = await (await fetch('/api/items')).json();
+  for (const it of items) it.review = it.review || { edits: {}, struck: [], missing: '', done: false };
+  const first = items.findIndex(it => !it.review.done);
+  show(first < 0 ? 0 : first);
+}
+
+function show(i) {
+  idx = (i + items.length) % items.length;
+  $('#main').hidden = false; $('#finished').hidden = true;
+  const it = items[idx];
+  $('#img').src = '/img/' + it.id;
+  $('#img').classList.remove('actual');
+  $('#title').textContent = `${idx + 1}. ${it.id}`;
+  $('#missing').value = it.review.missing || '';
+  const hints = $('#hints'); hints.replaceChildren();
+  for (const h of it.hints) hints.append(el('h4', '', h.name), el('pre', '', h.text || '(nothing)'));
+  renderNav(); renderLines();
+  window.scrollTo(0, 0);
+}
+
+function renderNav() {
+  const done = items.filter(it => it.review.done).length;
+  $('#progress').textContent = `${done} / ${items.length} done`;
+  const sel = $('#picker'); sel.replaceChildren();
+  items.forEach((it, j) => sel.add(new Option(`${it.review.done ? '✓' : '○'} ${j + 1}. ${it.id}`, j)));
+  sel.value = idx;
+  const r = items[idx].review;
+  $('#done').textContent = r.done ? 'Done ✓ — next' : 'Done — next';
+  $('#undone').hidden = !r.done;
+}
+
+function renderLines() {
+  const it = items[idx], r = it.review, box = $('#lines');
+  box.replaceChildren();
+  if (!it.lines.length) {
+    box.append(el('p', 'empty', 'Azure found no text here. If the screen does have text, ' +
+                               'add it under Missing words; otherwise just mark it done.'));
+    return;
+  }
+  it.lines.forEach((words, li) => {
+    const struck = r.struck.includes(li);
+    const row = el('div', 'line' + (struck ? ' struck' : ''));
+    words.forEach((w, wi) => row.append(wordEl(li, wi, w)));
+    const x = el('button', 'strike', struck ? '↺ restore' : '✕');
+    x.title = struck ? 'Put this line back' : 'This line is not on the screen';
+    x.onclick = () => {
+      r.struck = struck ? r.struck.filter(n => n !== li) : [...r.struck, li];
+      changed(); renderLines();
+    };
+    row.append(x);
+    box.append(row);
+  });
+}
+
+function wordEl(li, wi, orig) {
+  const key = `${li}:${wi}`, cur = items[idx].review.edits[key];
+  const s = el('span', 'w');
+  if (cur === undefined) s.textContent = orig;
+  else if (cur === '') { s.classList.add('deleted'); s.textContent = orig; }
+  else { s.classList.add('fixed'); s.append(el('s', '', orig), cur); }
+  s.title = 'Click to correct';
+  s.onclick = () => editWord(s, li, wi, orig);
+  return s;
+}
+
+function editWord(span, li, wi, orig) {
+  const r = items[idx].review, key = `${li}:${wi}`;
+  const inp = el('input', 'wedit');
+  inp.value = r.edits[key] ?? orig;
+  inp.size = Math.max(inp.value.length + 2, 6);
+  span.replaceWith(inp);
+  inp.focus(); inp.select();
+  let finished = false;
+  const finish = commit => {
+    if (finished) return;
+    finished = true;
+    if (commit) {
+      const v = inp.value.trim();
+      if (v === orig) delete r.edits[key]; else r.edits[key] = v;
+      changed();
+    }
+    // Swap only this word back in: redrawing every line here would swallow a
+    // click on the next word, since blur fires before that click lands.
+    inp.replaceWith(wordEl(li, wi, orig));
+  };
+  inp.oninput = () => { inp.size = Math.max(inp.value.length + 2, 6); };
+  inp.onkeydown = e => {
+    if (e.key === 'Enter') finish(true);
+    if (e.key === 'Escape') finish(false);
+  };
+  inp.onblur = () => finish(true);
+}
+
+function changed() {
+  clearTimeout(timer);
+  $('#status').textContent = 'Unsaved…';
+  timer = setTimeout(() => save(items[idx]), 400);
+}
+
+async function save(it) {
+  clearTimeout(timer);
+  try {
+    const res = await fetch('/api/review', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: it.id, review: it.review }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    $('#status').textContent = 'Saved ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    $('#status').textContent = 'Save failed: ' + e.message + ' (is ocr_review.py still running?)';
+  }
+}
+
+async function leave(target) {
+  if (timer) await save(items[idx]);
+  show(target);
+}
+
+$('#missing').oninput = () => { items[idx].review.missing = $('#missing').value; changed(); };
+$('#img').onclick = () => $('#img').classList.toggle('actual');
+$('#prev').onclick = () => leave(idx - 1);
+$('#next').onclick = () => leave(idx + 1);
+$('#picker').onchange = e => leave(+e.target.value);
+$('#back').onclick = () => show(idx);
+$('#undone').onclick = async () => {
+  items[idx].review.done = false; await save(items[idx]); renderNav();
+};
+$('#done').onclick = async () => {
+  items[idx].review.done = true;
+  await save(items[idx]);
+  const order = [...items.keys()].map(k => (idx + 1 + k) % items.length);
+  const next = order.find(j => !items[j].review.done);
+  if (next === undefined) {
+    renderNav(); $('#main').hidden = true; $('#finished').hidden = false;
+  } else show(next);
+};
+window.addEventListener('beforeunload', () => {
+  if (timer) navigator.sendBeacon('/api/review',
+    JSON.stringify({ id: items[idx].id, review: items[idx].review }));
+});
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+  if (e.key === 'ArrowRight') leave(idx + 1);
+  if (e.key === 'ArrowLeft') leave(idx - 1);
+});
+
+load();
+</script>
+</body>
+</html>

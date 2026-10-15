@@ -16,6 +16,7 @@ python pipeline/ocr_bench.py run easyocr                    # ~3.5 min on CPU (P
 python pipeline/ocr_bench.py run unlimited-ocr              # GPU only, see below
 python pipeline/ocr_bench.py run azure                      # ~30 s, uploads to Azure, see below
 python pipeline/ocr_bench.py compare                        # writes report.md
+python pipeline/ocr_review.py                               # correct Azure's text -> ground truth
 ```
 
 Each run writes `<run>/ocr.json` (same shape as `01-ocr/ocr.json`, plus per-segment

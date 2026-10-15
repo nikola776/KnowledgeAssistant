@@ -3,30 +3,43 @@
 Hand-checked transcriptions that `pipeline/ocr_bench.py compare` scores every engine
 against. Without them the benchmark measures agreement with Windows OCR, not accuracy.
 
-## Format
+## The quick way: correct Azure's reading
 
-One file per screenshot: `<doc_id>/<image name without .png>.txt`, for example
-`sol-386/obj0018_1243x807.txt` for `01-ocr/images/sol-386/obj0018_1243x807.png`.
+```bash
+python pipeline/ocr_review.py        # opens http://127.0.0.1:8765/
+```
 
-- Type what is on screen, one on-screen line per line, in logical reading order.
-- Include every readable label, button and menu item, not just the relevant ones.
-- Leave text you cannot read out rather than guessing.
-- **An empty file means the image has no readable text** (a product photo). These score how
-  much noise an engine invents, so include two or three.
-- Type from the image. Starting from one engine's output, including `01-ocr/text/`, biases
-  the score toward that engine.
+The page shows each screenshot next to what Azure read. Every word counts as correct
+unless you change it:
 
-## Which images
+- **Click a wrong word** and type the right one. Enter saves, Esc cancels, an empty box
+  deletes the word.
+- **✕** strikes a whole line that isn't on the screen.
+- **Missing words** takes text Azure didn't read at all. "What other engines read" at the
+  bottom helps you spot it.
+- **Done — next** writes this folder's file for that screenshot. Reopen removes it again.
 
-15 to 20 is enough to separate the engines. Cover the kinds of screen in the corpus rather
-than one article:
+Edits save as you go into `../review.json`, so you can stop and come back. The 20
+screenshots are listed in `SAMPLE` in `pipeline/ocr_review.py`: every kind of screen,
+weighted toward the hard ones, plus the only two images with no text (sol-403 obj0017
+and obj0053).
 
-- dense settings panels: sol-386 (NVIDIA), sol-402
-- Unite: sol-406, sol-412, sol-441
-- 3Shape portal and account screens: sol-384, sol-395, sol-396
-- calibration and scanner management: sol-403
-- the blurry screens where engines disagree most: sol-391, sol-395, sol-403
-- two or three product photos, as empty files
+**The trade-off:** starting from Azure is far quicker than typing, but an Azure mistake you
+miss counts as correct, and Azure's line order becomes the reference. Word precision and
+recall ignore order and stay fair. CER and WER flatter Azure slightly, so read Azure's row
+with that in mind.
+
+## File format
+
+To transcribe by hand instead, or to add screenshots outside the sample:
+`<doc_id>/<image name without .png>.txt`, for example `sol-386/obj0018_1243x807.txt` for
+`01-ocr/images/sol-386/obj0018_1243x807.png`.
+
+- One on-screen line per line, in logical reading order.
+- Every readable label, button and menu item, not just the relevant ones.
+- Leave out text you cannot read rather than guessing.
+- **An empty file means the image has no readable text.** These score how much noise an
+  engine invents.
 
 The account and Unite screenshots show real email addresses and names. Transcribe them as
-shown, and keep this folder off anything external.
+shown, and keep this folder and `review.json` off anything external. Neither is committed.
