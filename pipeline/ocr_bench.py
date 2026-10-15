@@ -590,8 +590,8 @@ def cmd_compare(args):
 
     blank = sum(not v.strip() for v in gt.values())
     if gt:
-        gt_note = (f"Scored against {len(gt)} hand-checked transcriptions "
-                   f"({blank} of them blank images).")
+        gt_note = (f"Scored against {len(gt)} transcriptions in "
+                   f"`{os.path.relpath(args.gt, ROOT)}` ({blank} of them blank images).")
     else:
         gt_note = ("No ground truth yet, so nothing here measures accuracy: word overlap "
                    "says how much an engine agrees with Windows, not which is right. "

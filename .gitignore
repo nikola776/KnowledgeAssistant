@@ -10,6 +10,7 @@
 /04-ocr-benchmark/*
 !/04-ocr-benchmark/README.md
 !/04-ocr-benchmark/report.md
+!/04-ocr-benchmark/report-auto.md
 !/04-ocr-benchmark/ground-truth/
 /04-ocr-benchmark/ground-truth/*
 !/04-ocr-benchmark/ground-truth/README.md

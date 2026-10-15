@@ -153,6 +153,30 @@ many words on screen it found.
 - CER and WER penalise reading order, which differs by engine on multi-column screens; word
   precision and recall ignore order and are the fairer comparison.
 
+## Automatic ground truth (backup)
+
+`python pipeline/ocr_autotruth.py` builds a machine-made ("silver") ground truth for all 67
+screenshots in `ground-truth-auto/`, without anyone reading them. It starts from Azure and,
+word by word, keeps what another engine also read or a dictionary or the KB articles know,
+corrects unsupported low-confidence words to the closest word another engine read or the
+KB uses ("Patiems" → "Patients"), drops stray characters and garbage, and adds words three
+engines agree Azure missed. `autotruth.md` explains every change and how the engines agree;
+it holds screenshot text, so it stays local. Score against it with
+`python pipeline/ocr_bench.py compare --gt 04-ocr-benchmark/ground-truth-auto --report
+04-ocr-benchmark/report-auto.md`.
+
+It favours Azure, and an error every engine makes is invisible to it, so the hand labels
+remain the reference. Checked against the first 16 of them, every change it made that the
+labels disagree with was either a leftover Azure misreading in the label (15 of them on the
+tiny sol-441 sign-in dialog, confirmed against the image) or a convention question: logo
+text read as `3Shape` and window controls (`- 0 X`) dropped as not being text. Two
+guessing rules (nearest dictionary word, swapping a known word) were removed for being
+wrong more often than right.
+
+Against it, over all 67 screenshots: Windows finds 69% of the words (96% of what it reads is
+right), Tesseract x2 69%, EasyOCR 68%, Unlimited-OCR 67%, Azure 99% (inflated, as it is the
+starting point). See `report-auto.md`.
+
 ## Data handling
 
 The `ocr.json` files contain the same unredacted text as `01-ocr/ocr.json`: email
