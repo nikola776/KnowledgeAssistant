@@ -89,15 +89,17 @@ def items():
     review = load_review()
     out = []
     for key in SAMPLE:
-        lines, confs = {}, {}
+        lines, confs, boxes = {}, {}, {}
         for s in base[key]["segments"]:
             lines.setdefault(s["line"], []).append(s["text"])
             confs.setdefault(s["line"], []).append(s["conf"])
+            boxes.setdefault(s["line"], []).append(s.get("box"))
         item_id = "/".join(key)
         out.append({
             "id": item_id,
             "lines": [lines[n] for n in sorted(lines)],
             "conf": [confs[n] for n in sorted(confs)],  # per word, for flagging
+            "boxes": [boxes[n] for n in sorted(boxes)],  # per word outline, image pixels
             "hints": [{"name": label, "text": join_lines(rows[key].get("segments", []), mc)
                        if "segments" in rows[key] else rows[key].get("text", "")}
                       for label, rows, mc in hints if rows and key in rows],

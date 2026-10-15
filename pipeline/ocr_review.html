@@ -41,8 +41,17 @@
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
   #imgbox { position: sticky; top: 64px; max-height: calc(100vh - 80px); overflow: auto; }
-  #img { display: block; width: 100%; cursor: zoom-in; image-rendering: auto; }
-  #img.actual { width: auto; max-width: none; cursor: zoom-out; }
+  #stage { position: relative; }
+  #stage.actual { width: max-content; }
+  #img { display: block; width: 100%; cursor: zoom-in; }
+  #stage.actual #img { width: auto; max-width: none; cursor: zoom-out; }
+  #boxes { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #boxes polygon { stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: all;
+                   cursor: pointer; }
+  #boxes .unsure { stroke: var(--warn); fill: rgba(240, 184, 92, .18); }
+  #boxes .fixed { stroke: var(--good); fill: rgba(31, 122, 69, .15); }
+  #boxes .deleted { stroke: var(--bad); fill: rgba(201, 59, 59, .15); }
+  #boxes .active { stroke: var(--accent); stroke-width: 3; fill: rgba(42, 98, 212, .25); }
   .hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
   #title { font-weight: 600; margin: 0 0 4px; word-break: break-all; }
   #lines { margin: 8px 0 16px; }
@@ -90,8 +99,13 @@
 
 <main id="main">
   <section class="panel" id="imgbox">
-    <p class="hint">Click the image to switch between fit-to-width and actual pixels.</p>
-    <img id="img" alt="Screenshot being reviewed">
+    <p class="hint">Boxes mark <b>amber</b> unsure, <b>green</b> corrected and <b>red</b> deleted
+      words; <b>blue</b> is the word you're on. Click a box to correct that word, or the image
+      to switch between fit-to-width and actual pixels.</p>
+    <div id="stage">
+      <img id="img" alt="Screenshot being reviewed">
+      <svg id="boxes" aria-hidden="true"></svg>
+    </div>
   </section>
 
   <section class="panel">
@@ -135,6 +149,8 @@ const $ = s => document.querySelector(s);
 // price of not reading every line.
 const UNSURE = 0.8;
 let items = [], idx = 0, timer = null, showAll = false;
+let active = null;  // "line:word" of the word highlighted in the image
+const SVG = 'http://www.w3.org/2000/svg';
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -155,8 +171,8 @@ function show(i) {
   $('#main').hidden = false; $('#finished').hidden = true;
   const it = items[idx];
   $('#img').src = '/img/' + it.id;
-  $('#img').classList.remove('actual');
-  showAll = false;
+  $('#stage').classList.remove('actual');
+  showAll = false; active = null;
   const unsure = it.conf.flat().filter(c => c < UNSURE).length;
   $('#title').replaceChildren(`${idx + 1}. ${it.id} · `,
     el('span', 'count', `${unsure} unsure word${unsure === 1 ? '' : 's'}`));
@@ -211,12 +227,51 @@ function renderLines() {
     more.onclick = () => { showAll = !showAll; renderLines(); };
     box.append(more);
   }
+  drawBoxes();
+}
+
+// Outlines over the screenshot, in image pixels: the viewBox makes them scale with
+// the image in both fit and actual-pixel modes.
+function drawBoxes() {
+  const img = $('#img'), svg = $('#boxes'), it = items[idx], r = it.review;
+  svg.replaceChildren();
+  if (!img.naturalWidth) return;  // drawn again on load
+  svg.setAttribute('viewBox', `0 0 ${img.naturalWidth} ${img.naturalHeight}`);
+  let top = null;
+  it.lines.forEach((words, li) => words.forEach((w, wi) => {
+    const key = `${li}:${wi}`, box = (it.boxes[li] || [])[wi], cur = r.edits[key];
+    if (!box) return;
+    const cls = key === active ? 'active' : cur === '' ? 'deleted' : cur !== undefined ? 'fixed'
+              : it.conf[li][wi] < UNSURE ? 'unsure' : null;
+    if (!cls) return;
+    const p = document.createElementNS(SVG, 'polygon');
+    p.setAttribute('points', box.join(' '));
+    p.setAttribute('class', cls);
+    p.dataset.key = key;
+    p.onclick = () => {
+      const span = document.querySelector(`#lines [data-key="${key}"]`);
+      if (span) editWord(span, li, wi, w);
+    };
+    if (cls === 'active') top = p; else svg.append(p);
+  }));
+  if (top) svg.append(top);  // last, so it sits above its neighbours
+}
+
+function setActive(key, scroll) {
+  active = key;
+  drawBoxes();
+  const p = key && $(`#boxes [data-key="${key}"]`);
+  if (scroll && p) p.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 function wordEl(li, wi, orig) {
   const key = `${li}:${wi}`, cur = items[idx].review.edits[key];
   const conf = items[idx].conf[li][wi];
   const s = el('span', 'w');
+  s.dataset.key = key;
+  s.onmouseenter = () => setActive(key, false);
+  s.onmouseleave = () => { if (document.activeElement !== s && active === key) setActive(null); };
+  s.onfocus = () => setActive(key, true);
   if (conf < UNSURE) {
     s.dataset.flag = '';
     s.tabIndex = 0;
@@ -239,8 +294,9 @@ function editWord(span, li, wi, orig) {
   inp.size = Math.max(inp.value.length + 2, 6);
   span.replaceWith(inp);
   inp.focus(); inp.select();
+  setActive(key, true);
   let finished = false;
-  const finish = (commit, advance) => {
+  const finish = (commit, advance, refocus) => {
     if (finished) return;
     finished = true;
     if (commit) {
@@ -257,14 +313,17 @@ function editWord(span, li, wi, orig) {
       const next = [...document.querySelectorAll('#lines [data-flag]')]
         .find(f => word.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING);
       (next || $('#missing')).focus();
-    } else if (word.dataset.flag !== undefined) word.focus();
+    } else if (refocus) word.focus();
+    else setActive(null);
   };
   inp.oninput = () => { inp.size = Math.max(inp.value.length + 2, 6); };
   inp.onkeydown = e => {
     if (e.key === 'Enter') { e.preventDefault(); finish(true, true); }
-    if (e.key === 'Escape') finish(false, false);
+    if (e.key === 'Escape') finish(false, false, true);
   };
-  inp.onblur = () => finish(true, false);
+  // A click elsewhere keeps its own focus: refocusing the word here would pull
+  // focus out of the Missing words box mid-click.
+  inp.onblur = () => finish(true, false, false);
 }
 
 function changed() {
@@ -293,7 +352,9 @@ async function leave(target) {
 }
 
 $('#missing').oninput = () => { items[idx].review.missing = $('#missing').value; changed(); };
-$('#img').onclick = () => $('#img').classList.toggle('actual');
+$('#img').onclick = () => $('#stage').classList.toggle('actual');
+$('#img').onload = drawBoxes;
+$('#missing').onfocus = () => setActive(null);
 $('#prev').onclick = () => leave(idx - 1);
 $('#next').onclick = () => leave(idx + 1);
 $('#picker').onchange = e => leave(+e.target.value);

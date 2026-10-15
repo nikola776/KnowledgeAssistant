@@ -102,7 +102,9 @@ def make_row(doc_id, path, segments, seconds):
         "seconds": round(seconds, 2),
         "segments": [{"text": s["text"],
                       "conf": None if s["conf"] is None else round(s["conf"], 3),
-                      "line": s["line"]}
+                      "line": s["line"],
+                      # Word outline where the engine gives one; ocr_review.py draws it.
+                      **({"box": [round(v, 1) for v in s["box"]]} if s.get("box") else {})}
                      for s in segments],
     }
 
@@ -361,7 +363,8 @@ def parse_analyze(result):
             spans = [(s["offset"], s["offset"] + s["length"]) for s in line["spans"]]
             for w in words_:
                 if any(a <= w["span"]["offset"] < b for a, b in spans):
-                    segs.append({"text": w["content"], "conf": w.get("confidence"), "line": n})
+                    segs.append({"text": w["content"], "conf": w.get("confidence"), "line": n,
+                                 "box": w.get("polygon")})  # x1 y1 .. x4 y4, image pixels
             n += 1
     return segs
 
