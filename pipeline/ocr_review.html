@@ -9,12 +9,14 @@
     --bg: #f6f7f9; --panel: #fff; --fg: #1d2330; --muted: #677085; --line: #dde1e8;
     --accent: #2a62d4; --accent-fg: #fff; --hover: #e8eefc;
     --bad: #c93b3b; --bad-bg: #fbeaea; --good: #1f7a45; --good-bg: #e6f4ec;
+    --warn: #b7791f; --warn-bg: #fdf1d8;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #14171d; --panel: #1c2028; --fg: #e4e7ee; --muted: #959db0; --line: #2e3440;
       --accent: #6f9bf2; --accent-fg: #0d1117; --hover: #26324a;
       --bad: #f07c7c; --bad-bg: #3a2224; --good: #6fd29a; --good-bg: #1d3328;
+      --warn: #f0b85c; --warn-bg: #3a3020;
     }
   }
   * { box-sizing: border-box; }
@@ -49,6 +51,11 @@
   .line.struck .w { text-decoration: line-through; color: var(--bad); opacity: .7; }
   .w { padding: 1px 4px; border-radius: 4px; cursor: pointer; }
   .w:hover { background: var(--hover); }
+  .w.unsure { background: var(--warn-bg); border-bottom: 2px dotted var(--warn); }
+  .w:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .more { display: block; width: 100%; margin-top: 6px; color: var(--muted); font-size: 13px;
+          text-align: left; border-style: dashed; }
+  .count { color: var(--warn); font-weight: 600; }
   .w.deleted { color: var(--bad); background: var(--bad-bg); text-decoration: line-through; }
   .w.fixed { background: var(--good-bg); color: var(--good); font-weight: 600; }
   .w.fixed s { color: var(--bad); font-weight: 400; margin-right: 4px; }
@@ -91,8 +98,10 @@
     <p id="title"></p>
     <p class="hint">
       This is what Azure read. Every word counts as correct unless you change it.
-      <b>Click a wrong word</b> to type the right one (<kbd>Enter</kbd> saves, <kbd>Esc</kbd> cancels,
-      empty deletes it). <b>✕</b> strikes a line that isn't on the screen.
+      <span class="w unsure">Amber</span> words are ones Azure wasn't sure about, and only their
+      lines are shown. <kbd>Tab</kbd> jumps between them, <kbd>Enter</kbd> opens one to correct
+      (<kbd>Enter</kbd> again saves and moves on, <kbd>Esc</kbd> cancels, empty deletes it).
+      You can click any word too. <b>✕</b> strikes a line that isn't on the screen.
     </p>
     <div id="lines"></div>
 
@@ -121,7 +130,11 @@
 
 <script>
 const $ = s => document.querySelector(s);
-let items = [], idx = 0, timer = null;
+// Azure word confidence below this is flagged. At 0.8 it flags ~19% of the sample's
+// words and caught 12 of 13 known Azure errors; the miss ("stanes", 0.94) is the
+// price of not reading every line.
+const UNSURE = 0.8;
+let items = [], idx = 0, timer = null, showAll = false;
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -143,7 +156,10 @@ function show(i) {
   const it = items[idx];
   $('#img').src = '/img/' + it.id;
   $('#img').classList.remove('actual');
-  $('#title').textContent = `${idx + 1}. ${it.id}`;
+  showAll = false;
+  const unsure = it.conf.flat().filter(c => c < UNSURE).length;
+  $('#title').replaceChildren(`${idx + 1}. ${it.id} · `,
+    el('span', 'count', `${unsure} unsure word${unsure === 1 ? '' : 's'}`));
   $('#missing').value = it.review.missing || '';
   const hints = $('#hints'); hints.replaceChildren();
   for (const h of it.hints) hints.append(el('h4', '', h.name), el('pre', '', h.text || '(nothing)'));
@@ -170,8 +186,11 @@ function renderLines() {
                                'add it under Missing words; otherwise just mark it done.'));
     return;
   }
+  let hidden = 0;
   it.lines.forEach((words, li) => {
     const struck = r.struck.includes(li);
+    const touched = struck || words.some((_, wi) => `${li}:${wi}` in r.edits);
+    if (!showAll && !touched && !it.conf[li].some(c => c < UNSURE)) { hidden++; return; }
     const row = el('div', 'line' + (struck ? ' struck' : ''));
     words.forEach((w, wi) => row.append(wordEl(li, wi, w)));
     const x = el('button', 'strike', struck ? '↺ restore' : '✕');
@@ -183,15 +202,32 @@ function renderLines() {
     row.append(x);
     box.append(row);
   });
+  if (hidden || showAll) {
+    const sure = it.lines.filter((_, li) => !it.conf[li].some(c => c < UNSURE)).length;
+    const more = el('button', 'more', showAll
+      ? 'Hide the lines Azure was sure about'
+      : `Show ${hidden} line${hidden === 1 ? '' : 's'} Azure was sure about (they count as correct)`);
+    if (showAll && !sure) return;
+    more.onclick = () => { showAll = !showAll; renderLines(); };
+    box.append(more);
+  }
 }
 
 function wordEl(li, wi, orig) {
   const key = `${li}:${wi}`, cur = items[idx].review.edits[key];
+  const conf = items[idx].conf[li][wi];
   const s = el('span', 'w');
-  if (cur === undefined) s.textContent = orig;
+  if (conf < UNSURE) {
+    s.dataset.flag = '';
+    s.tabIndex = 0;
+    s.onkeydown = e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editWord(s, li, wi, orig); }
+    };
+  }
+  if (cur === undefined) { s.textContent = orig; if (conf < UNSURE) s.classList.add('unsure'); }
   else if (cur === '') { s.classList.add('deleted'); s.textContent = orig; }
   else { s.classList.add('fixed'); s.append(el('s', '', orig), cur); }
-  s.title = 'Click to correct';
+  s.title = `Azure confidence ${Math.round(conf * 100)}% · click to correct`;
   s.onclick = () => editWord(s, li, wi, orig);
   return s;
 }
@@ -204,7 +240,7 @@ function editWord(span, li, wi, orig) {
   span.replaceWith(inp);
   inp.focus(); inp.select();
   let finished = false;
-  const finish = commit => {
+  const finish = (commit, advance) => {
     if (finished) return;
     finished = true;
     if (commit) {
@@ -214,14 +250,21 @@ function editWord(span, li, wi, orig) {
     }
     // Swap only this word back in: redrawing every line here would swallow a
     // click on the next word, since blur fires before that click lands.
-    inp.replaceWith(wordEl(li, wi, orig));
+    const word = wordEl(li, wi, orig);
+    inp.replaceWith(word);
+    if (advance) {
+      // The next amber word after this one, even if this one was not amber.
+      const next = [...document.querySelectorAll('#lines [data-flag]')]
+        .find(f => word.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING);
+      (next || $('#missing')).focus();
+    } else if (word.dataset.flag !== undefined) word.focus();
   };
   inp.oninput = () => { inp.size = Math.max(inp.value.length + 2, 6); };
   inp.onkeydown = e => {
-    if (e.key === 'Enter') finish(true);
-    if (e.key === 'Escape') finish(false);
+    if (e.key === 'Enter') { e.preventDefault(); finish(true, true); }
+    if (e.key === 'Escape') finish(false, false);
   };
-  inp.onblur = () => finish(true);
+  inp.onblur = () => finish(true, false);
 }
 
 function changed() {

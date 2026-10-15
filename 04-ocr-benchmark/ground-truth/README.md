@@ -12,6 +12,10 @@ python pipeline/ocr_review.py        # opens http://127.0.0.1:8765/
 The page shows each screenshot next to what Azure read. Every word counts as correct
 unless you change it:
 
+- **Amber words** are ones Azure was less than 80% sure of, and by default only their lines
+  are shown; the rest collapse and count as correct. Tab jumps between amber words, Enter
+  opens one, Enter again saves it and moves on. At 80% the flags caught 12 of 13 Azure
+  errors found so far; confident mistakes ("stanes" for "status", 94%) need "Show all".
 - **Click a wrong word** and type the right one. Enter saves, Esc cancels, an empty box
   deletes the word.
 - **✕** strikes a whole line that isn't on the screen.
