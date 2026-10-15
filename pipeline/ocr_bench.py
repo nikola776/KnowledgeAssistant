@@ -10,10 +10,18 @@ EasyOCR phrases, Unlimited-OCR lines) with a 0-1 confidence where the engine
 reports one and a line number, and `seconds`. Windows.Media.Ocr reports no
 confidence, so the baseline has no segments.
 
-Everything runs on-device. None of the engines can be installed on the
+Every engine but one runs on-device. None of them can be installed on the
 ThreatLocker-managed Windows machine, so this is a benchmark, not a pipeline
 stage: run it wherever tesseract (binary on PATH), easyocr (pip, PyTorch) or
 Unlimited-OCR (CUDA GPU, pipeline/requirements-unlimited-ocr.txt) is.
+
+The exception is `azure`, which uploads every screenshot to Azure AI Document
+Intelligence. The screenshots are unredacted, so point it only at a resource in
+mydentist's own tenant. Settings come from the environment or a .env file in
+the project root (never committed): AZURE_DI_ENDPOINT, plus AZURE_DI_KEY if
+the resource allows keys. mydentist's does not, so by default it signs in with
+a Microsoft Entra token from the Azure CLI (`az login --tenant mydentist.co.uk`;
+the account needs the Cognitive Services User role on the resource).
 
 Ground truth: 04-ocr-benchmark/ground-truth/<doc_id>/<image basename>.txt, one
 on-screen line per line, in logical reading order. An empty file means the image
@@ -23,7 +31,8 @@ Run:
   python pipeline/ocr_bench.py run tesseract
   python pipeline/ocr_bench.py run tesseract --psm 11 --scale 2
   python pipeline/ocr_bench.py run easyocr
-  python pipeline/ocr_bench.py run unlimited-ocr --mode gundam
+  python pipeline/ocr_bench.py run unlimited-ocr --mode base --gpu-memory 4GiB
+  python pipeline/ocr_bench.py run azure --di-model prebuilt-read
   python pipeline/ocr_bench.py compare
 """
 
@@ -35,6 +44,8 @@ import os
 import re
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
@@ -182,7 +193,7 @@ def group_lines(dets):
     return segs
 
 
-def unlimited_ocr_engine(mode, model_name, revision):
+def unlimited_ocr_engine(mode, model_name, revision, gpu_memory=None):
     """baidu/Unlimited-OCR, a 3B vision-language model derived from DeepSeek-OCR.
 
     Its infer() calls .cuda() directly throughout, so this needs an NVIDIA GPU.
@@ -202,9 +213,19 @@ def unlimited_ocr_engine(mode, model_name, revision):
     # commit whose code was reviewed, so a later push to the repo cannot change it.
     kw = dict(trust_remote_code=True, revision=revision)
     tokenizer = AutoTokenizer.from_pretrained(model_name, **kw)
-    model = AutoModel.from_pretrained(model_name, use_safetensors=True,
-                                      torch_dtype=torch.bfloat16, **kw)
-    model = model.eval().cuda()
+    if gpu_memory:
+        # The bf16 weights alone fill an 8 GB card, leaving nothing for the vision
+        # encoder's activations. Cap the GPU share and let accelerate keep the
+        # remaining decoder layers in system RAM, streaming them in per forward
+        # pass. Slower, but the weights stay exactly as published.
+        model = AutoModel.from_pretrained(model_name, use_safetensors=True,
+                                          dtype=torch.bfloat16, device_map="auto",
+                                          max_memory={0: gpu_memory, "cpu": "64GiB"}, **kw)
+        model = model.eval()
+    else:
+        model = AutoModel.from_pretrained(model_name, use_safetensors=True,
+                                          dtype=torch.bfloat16, **kw)
+        model = model.eval().cuda()
 
     # The model card's two single-image configurations. gundam tiles the image
     # into 640px crops plus a 1024px overview, which suits small UI text.
@@ -230,8 +251,10 @@ def unlimited_ocr_engine(mode, model_name, revision):
 
 # Unlimited-OCR answers in markdown, with <|det|>type[bbox]<|/det|> grounding
 # markers and HTML for tables. The other engines return plain text, so reduce
-# it to the words a reader would see before comparing.
-GROUNDING = re.compile(r"<\|(ref|det)\|>.*?<\|/\1\|>", re.S)
+# it to the words a reader would see before comparing. A marker sometimes comes
+# out unclosed and full of junk ("<|det|>header { } { }"), so one ends at its
+# closing tag or the end of the line, whichever is first.
+GROUNDING = re.compile(r"<\|(ref|det)\|>.*?(?:<\|/\1\|>|$)", re.M)
 
 
 def plain_text(md):
@@ -240,7 +263,7 @@ def plain_text(md):
     t = html.unescape(re.sub(r"<[^>]+>", " ", t))
     out = []
     for line in t.splitlines():
-        line = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", line)  # image placeholders
+        line = re.sub(r"!\[[^\]]*\]\([^)]*\)|\[Non-Text\]", "", line)  # image/icon placeholders
         if re.fullmatch(r"[\s|:\-]*", line):  # blank, or a markdown table rule
             continue
         line = re.sub(r"^\s*(#+|[-*+])\s+", "", line)  # headings, bullets
@@ -248,6 +271,100 @@ def plain_text(md):
         if line:
             out.append(line)
     return "\n".join(out)
+
+
+DI_API_VERSION = "2024-11-30"
+DI_SCOPE = "https://cognitiveservices.azure.com"
+
+
+def load_dotenv():
+    """KEY=VALUE lines from <root>/.env into os.environ, without overriding what is set."""
+    path = os.path.join(ROOT, ".env")
+    if not os.path.exists(path):
+        return
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+def azure_engine(model):
+    """Azure AI Document Intelligence over its REST API, stdlib only.
+
+    prebuilt-read is plain OCR; prebuilt-layout adds reading order and tables.
+    Word confidences become segments, grouped into Azure's own lines.
+    """
+    load_dotenv()
+    endpoint = os.environ.get("AZURE_DI_ENDPOINT", "").rstrip("/")
+    if not endpoint:
+        raise SystemExit("set AZURE_DI_ENDPOINT (environment or .env)")
+    if os.environ.get("AZURE_DI_KEY"):
+        auth = {"Ocp-Apim-Subscription-Key": os.environ["AZURE_DI_KEY"]}
+    else:
+        # mydentist's resource has key auth disabled by policy. A token lasts about
+        # an hour, far longer than 67 images take.
+        cmd = ["az", "account", "get-access-token", "--resource", DI_SCOPE,
+               "--query", "accessToken", "-o", "tsv"]
+        if os.environ.get("AZURE_DI_TENANT"):
+            cmd += ["--tenant", os.environ["AZURE_DI_TENANT"]]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode:
+            raise SystemExit(f"no AZURE_DI_KEY and az could not get a token:\n{res.stderr}")
+        auth = {"Authorization": f"Bearer {res.stdout.strip()}"}
+    url = (f"{endpoint}/documentintelligence/documentModels/{model}:analyze"
+           f"?api-version={DI_API_VERSION}")
+
+    def call(req):
+        # S0 allows 15 requests a second and F0 far fewer; on 429 wait as told.
+        for _ in range(10):
+            try:
+                return urllib.request.urlopen(req, timeout=60)
+            except urllib.error.HTTPError as e:
+                if e.code != 429:
+                    raise RuntimeError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
+                time.sleep(float(e.headers.get("Retry-After") or 2))
+        raise RuntimeError("still rate limited after 10 retries")
+
+    def run(path):
+        with open(path, "rb") as fh:
+            body = fh.read()
+        req = urllib.request.Request(url, data=body, method="POST",
+                                     headers={**auth, "Content-Type": "image/png"})
+        with call(req) as res:
+            op = res.headers["Operation-Location"]
+        while True:
+            time.sleep(1)
+            with call(urllib.request.Request(op, headers=auth)) as res:
+                result = json.load(res)
+            if result["status"] == "succeeded":
+                return parse_analyze(result["analyzeResult"])
+            if result["status"] == "failed":
+                raise RuntimeError(json.dumps(result.get("error"))[:300])
+
+    return run, 4, f"Azure Document Intelligence {model} (api {DI_API_VERSION})"
+
+
+def parse_analyze(result):
+    """analyzeResult -> word segments, one line number per Azure line."""
+    segs, n = [], 0
+    for page in result.get("pages", []):
+        words_ = page.get("words", [])
+        for line in page.get("lines", []):
+            spans = [(s["offset"], s["offset"] + s["length"]) for s in line["spans"]]
+            for w in words_:
+                if any(a <= w["span"]["offset"] < b for a, b in spans):
+                    segs.append({"text": w["content"], "conf": w.get("confidence"), "line": n})
+            n += 1
+    return segs
+
+
+def write_json(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=1, ensure_ascii=False)
+    os.replace(tmp, path)
 
 
 def cmd_run(args):
@@ -264,12 +381,18 @@ def cmd_run(args):
         version = f"easyocr {easyocr.__version__}"
         settings = {"gpu": args.gpu}
         default = "easyocr"
+    elif args.engine == "azure":
+        run, workers, version = azure_engine(args.di_model)
+        settings = {"model": args.di_model, "api_version": DI_API_VERSION}
+        default = "azure-" + args.di_model.replace("prebuilt-", "")
     else:
-        run, workers, version = unlimited_ocr_engine(args.mode, args.model, args.revision)
-        settings = {"mode": args.mode, "model": args.model, "revision": args.revision}
+        run, workers, version = unlimited_ocr_engine(args.mode, args.model, args.revision,
+                                                     args.gpu_memory)
+        settings = {"mode": args.mode, "model": args.model, "revision": args.revision,
+                    "gpu_memory": args.gpu_memory}
         default = "unlimited-ocr" + ("-base" if args.mode == "base" else "")
     name = args.name or default
-    images = list_images()
+    images = list_images()[:args.limit]
     print(f"{version}: {len(images)} images -> 04-ocr-benchmark/{name}\n")
 
     def one(item):
@@ -287,20 +410,25 @@ def cmd_run(args):
             row["error"] = str(e)
             return row
 
+    out = os.path.join(BENCH, name)
+    os.makedirs(out, exist_ok=True)
+    # Saved after every image, so a crash hours into a slow engine keeps what it
+    # finished. compare only reads ocr.json, so it never scores a partial run.
+    partial = os.path.join(out, "ocr.partial.json")
+
     t0, rows = time.time(), []
     with ThreadPoolExecutor(workers) as ex:
         for i, row in enumerate(ex.map(one, images), 1):
             rows.append(row)
+            write_json(partial, rows)
             status = f"FAILED: {row['error']}" if "error" in row else \
                 f"lines={row['lines']:<4} words={row['words']:<4} {row['seconds']}s"
             print(f"[{i:3}/{len(images)}] {row['doc_id']:<9} {row['image']:<28} {status}",
                   flush=True)
     seconds = round(time.time() - t0, 1)
 
-    out = os.path.join(BENCH, name)
-    os.makedirs(out, exist_ok=True)
-    with open(os.path.join(out, "ocr.json"), "w", encoding="utf-8") as fh:
-        json.dump(rows, fh, indent=1, ensure_ascii=False)
+    write_json(os.path.join(out, "ocr.json"), rows)
+    os.remove(partial)
     meta = {"name": name, "engine": version, "settings": settings,
             "date": date.today().isoformat(), "images": len(rows),
             "failed": sum("error" in r for r in rows), "seconds": seconds}
@@ -489,7 +617,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="OCR every screenshot with one engine")
-    r.add_argument("engine", choices=["tesseract", "easyocr", "unlimited-ocr"])
+    r.add_argument("engine", choices=["tesseract", "easyocr", "unlimited-ocr", "azure"])
     r.add_argument("--psm", type=int, default=3,
                    help="tesseract page segmentation mode (11 = sparse text)")
     r.add_argument("--scale", type=float, default=1,
@@ -501,8 +629,16 @@ def main():
                    help="unlimited-ocr: Hugging Face id or a local copy of the repo")
     r.add_argument("--revision",
                    help="unlimited-ocr: model repo commit to load (pin the reviewed one)")
+    r.add_argument("--di-model", default="prebuilt-read",
+                   help="azure: prebuilt-read (OCR) or prebuilt-layout (adds reading order, tables)")
+    r.add_argument("--gpu-memory",
+                   help="unlimited-ocr: cap the GPU share of the weights, e.g. 4GiB, and keep "
+                        "the rest in system RAM (needs accelerate); for cards under ~12 GB")
     r.add_argument("--name", help="output folder under 04-ocr-benchmark "
                                   "(default: engine plus non-default options)")
+    r.add_argument("--limit", type=int,
+                   help="only the first N images, for a smoke test; use a separate --name "
+                        "so compare does not score a partial run")
 
     c = sub.add_parser("compare", help="score every run against Windows OCR and the ground truth")
     c.add_argument("--min-conf", type=float, default=0.5,
