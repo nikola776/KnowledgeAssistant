@@ -9,14 +9,14 @@
     --bg: #f6f7f9; --panel: #fff; --fg: #1d2330; --muted: #677085; --line: #dde1e8;
     --accent: #2a62d4; --accent-fg: #fff; --hover: #e8eefc;
     --bad: #c93b3b; --bad-bg: #fbeaea; --good: #1f7a45; --good-bg: #e6f4ec;
-    --warn: #b7791f; --warn-bg: #fdf1d8;
+    --warn: #b7791f; --warn-bg: #fdf1d8; --sus: #7a4fd0; --sus-bg: #efe8fc;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #14171d; --panel: #1c2028; --fg: #e4e7ee; --muted: #959db0; --line: #2e3440;
       --accent: #6f9bf2; --accent-fg: #0d1117; --hover: #26324a;
       --bad: #f07c7c; --bad-bg: #3a2224; --good: #6fd29a; --good-bg: #1d3328;
-      --warn: #f0b85c; --warn-bg: #3a3020;
+      --warn: #f0b85c; --warn-bg: #3a3020; --sus: #b79cf5; --sus-bg: #2d2442;
     }
   }
   * { box-sizing: border-box; }
@@ -51,6 +51,7 @@
   #boxes .unsure { stroke: var(--warn); fill: rgba(240, 184, 92, .18); }
   #boxes .fixed { stroke: var(--good); fill: rgba(31, 122, 69, .15); }
   #boxes .deleted { stroke: var(--bad); fill: rgba(201, 59, 59, .15); }
+  #boxes .suspect { stroke: var(--sus); fill: rgba(122, 79, 208, .16); stroke-dasharray: 5 3; }
   #boxes .active { stroke: var(--accent); stroke-width: 3; fill: rgba(42, 98, 212, .25); }
   .hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
   #title { font-weight: 600; margin: 0 0 4px; word-break: break-all; }
@@ -61,7 +62,15 @@
   .w { padding: 1px 4px; border-radius: 4px; cursor: pointer; }
   .w:hover { background: var(--hover); }
   .w.unsure { background: var(--warn-bg); border-bottom: 2px dotted var(--warn); }
+  .w.suspect { outline: 1.5px dashed var(--sus); outline-offset: 1px; }
   .w:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .wc { display: inline-flex; align-items: baseline; gap: 3px; }
+  .sug { font-size: 12px; line-height: 1.3; padding: 0 7px; border: 1px solid var(--sus);
+         border-radius: 10px; color: var(--sus); background: var(--sus-bg); }
+  .sug:hover { background: var(--sus-bg); filter: brightness(0.95); }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0 0 8px; }
+  .chips .hint { margin: 0 4px 0 0; }
+  .count.sus { color: var(--sus); }
   .more { display: block; width: 100%; margin-top: 6px; color: var(--muted); font-size: 13px;
           text-align: left; border-style: dashed; }
   .count { color: var(--warn); font-weight: 600; }
@@ -99,8 +108,8 @@
 
 <main id="main">
   <section class="panel" id="imgbox">
-    <p class="hint">Boxes mark <b>amber</b> unsure, <b>green</b> corrected and <b>red</b> deleted
-      words; <b>blue</b> is the word you're on. Click a box to correct that word, or the image
+    <p class="hint">Boxes mark <b>amber</b> unsure, <b>purple</b> suspicious, <b>green</b> corrected
+      and <b>red</b> deleted words; <b>blue</b> is the word you're on. Click a box to correct that word, or the image
       to switch between fit-to-width and actual pixels.</p>
     <div id="stage">
       <img id="img" alt="Screenshot being reviewed">
@@ -112,15 +121,18 @@
     <p id="title"></p>
     <p class="hint">
       This is what Azure read. Every word counts as correct unless you change it.
-      <span class="w unsure">Amber</span> words are ones Azure wasn't sure about, and only their
-      lines are shown. <kbd>Tab</kbd> jumps between them, <kbd>Enter</kbd> opens one to correct
-      (<kbd>Enter</kbd> again saves and moves on, <kbd>Esc</kbd> cancels, empty deletes it).
-      You can click any word too. <b>✕</b> strikes a line that isn't on the screen.
+      <span class="w unsure">Amber</span>: Azure wasn't sure. <span class="w suspect">Purple</span>:
+      comparing the engines says it's probably wrong; the chip next to it is the suggestion
+      (click to accept, <b>?</b> means just check it). Only flagged lines are shown.
+      <kbd>Tab</kbd> jumps between flagged words, <kbd>Enter</kbd> opens one (with the suggestion
+      filled in), <kbd>Enter</kbd> again saves and moves on, <kbd>Esc</kbd> keeps the word as it was,
+      empty deletes it. You can click any word too. <b>✕</b> strikes a line that isn't on the screen.
     </p>
     <div id="lines"></div>
 
     <label for="missing">Missing words</label>
     <p class="hint">Text on the screen that Azure didn't read at all. One line per on-screen line.</p>
+    <div id="suggest" class="chips"></div>
     <textarea id="missing" placeholder="e.g. Disconnect"></textarea>
 
     <div class="actions">
@@ -159,10 +171,29 @@ function el(tag, cls, text) {
   return e;
 }
 
+// The purple mark on a word, unless the reviewer has already decided that word
+// (edited it or struck its line).
+function markOf(it, key) {
+  const m = it.marks[key], r = it.review;
+  if (!m || key in r.edits || r.struck.includes(+key.split(':')[0])) return null;
+  return m;
+}
+const openMarks = it => Object.keys(it.marks).filter(k => markOf(it, k));
+function openSuggest(it) {
+  const have = new Set((it.review.missing || '').toLowerCase().match(/[a-z0-9]+/g) || []);
+  return it.suggest.filter(w => !have.has(w.toLowerCase()));
+}
+// Not finished, or finished before the purple flags existed and some are still open.
+// Pressing Done (again) sets rechecked and settles it.
+function needsWork(it) {
+  const r = it.review;
+  return !r.done || (!r.rechecked && (openMarks(it).length > 0 || openSuggest(it).length > 0));
+}
+
 async function load() {
   items = await (await fetch('/api/items')).json();
   for (const it of items) it.review = it.review || { edits: {}, struck: [], missing: '', done: false };
-  const first = items.findIndex(it => !it.review.done);
+  const first = items.findIndex(needsWork);
   show(first < 0 ? 0 : first);
 }
 
@@ -173,25 +204,54 @@ function show(i) {
   $('#img').src = '/img/' + it.id;
   $('#stage').classList.remove('actual');
   showAll = false; active = null;
-  const unsure = it.conf.flat().filter(c => c < UNSURE).length;
-  $('#title').replaceChildren(`${idx + 1}. ${it.id} · `,
-    el('span', 'count', `${unsure} unsure word${unsure === 1 ? '' : 's'}`));
   $('#missing').value = it.review.missing || '';
+  renderSuggest();
   const hints = $('#hints'); hints.replaceChildren();
   for (const h of it.hints) hints.append(el('h4', '', h.name), el('pre', '', h.text || '(nothing)'));
   renderNav(); renderLines();
   window.scrollTo(0, 0);
 }
 
+function renderTitle() {
+  const it = items[idx], unsure = it.conf.flat().filter(c => c < UNSURE).length;
+  const purple = openMarks(it).length;
+  const parts = [`${idx + 1}. ${it.id} · `, el('span', 'count', `${unsure} unsure`)];
+  if (purple) parts.push(' · ', el('span', 'count sus', `${purple} suspicious`));
+  $('#title').replaceChildren(...parts);
+}
+
+function renderSuggest() {
+  const it = items[idx], box = $('#suggest'), open = openSuggest(it);
+  box.replaceChildren();
+  if (!open.length) return;
+  box.append(el('span', 'hint', 'Other engines also read:'));
+  for (const w of open) {
+    const b = el('button', 'sug', `+ ${w}`);
+    b.title = 'Two or more other engines read this and Azure did not. Click to add it.';
+    b.onclick = () => {
+      const t = $('#missing');
+      t.value = (t.value.trim() ? t.value.trim() + '\n' : '') + w;
+      it.review.missing = t.value;
+      changed(); renderSuggest();
+    };
+    box.append(b);
+  }
+}
+
 function renderNav() {
+  renderTitle();
   const done = items.filter(it => it.review.done).length;
-  $('#progress').textContent = `${done} / ${items.length} done`;
-  const sel = $('#picker'), todo = el('optgroup'), fin = el('optgroup');
+  const again = items.filter(it => it.review.done && needsWork(it)).length;
+  $('#progress').textContent = `${done} / ${items.length} done` + (again ? ` · ${again} to re-check` : '');
+  const sel = $('#picker'), todo = el('optgroup'), re = el('optgroup'), fin = el('optgroup');
   todo.label = `To do (${items.length - done})`;
-  fin.label = `Done (${done})`;
-  items.forEach((it, j) =>
-    (it.review.done ? fin : todo).append(new Option(`${it.review.done ? '✓' : '○'} ${j + 1}. ${it.id}`, j)));
-  sel.replaceChildren(todo, fin);
+  re.label = `To re-check (${again})`;
+  fin.label = `Done (${done - again})`;
+  items.forEach((it, j) => {
+    const g = !it.review.done ? todo : needsWork(it) ? re : fin;
+    g.append(new Option(`${g === todo ? '○' : g === re ? '◐' : '✓'} ${j + 1}. ${it.id}`, j));
+  });
+  sel.replaceChildren(...[todo, re, fin].filter(g => g.children.length));
   sel.value = idx;
   const r = items[idx].review;
   $('#done').textContent = r.done ? 'Done ✓ — next' : 'Done — next';
@@ -206,11 +266,13 @@ function renderLines() {
                                'add it under Missing words; otherwise just mark it done.'));
     return;
   }
+  const flagged = li => it.conf[li].some(c => c < UNSURE)
+    || it.lines[li].some((_, wi) => markOf(it, `${li}:${wi}`));
   let hidden = 0;
   it.lines.forEach((words, li) => {
     const struck = r.struck.includes(li);
     const touched = struck || words.some((_, wi) => `${li}:${wi}` in r.edits);
-    if (!showAll && !touched && !it.conf[li].some(c => c < UNSURE)) { hidden++; return; }
+    if (!showAll && !touched && !flagged(li)) { hidden++; return; }
     const row = el('div', 'line' + (struck ? ' struck' : ''));
     words.forEach((w, wi) => row.append(wordEl(li, wi, w)));
     const x = el('button', 'strike', struck ? '↺ restore' : '✕');
@@ -223,10 +285,10 @@ function renderLines() {
     box.append(row);
   });
   if (hidden || showAll) {
-    const sure = it.lines.filter((_, li) => !it.conf[li].some(c => c < UNSURE)).length;
+    const sure = it.lines.filter((_, li) => !flagged(li)).length;
     const more = el('button', 'more', showAll
-      ? 'Hide the lines Azure was sure about'
-      : `Show ${hidden} line${hidden === 1 ? '' : 's'} Azure was sure about (they count as correct)`);
+      ? 'Hide the lines with no flags'
+      : `Show ${hidden} line${hidden === 1 ? '' : 's'} with no flags (they count as correct)`);
     if (showAll && !sure) return;
     more.onclick = () => { showAll = !showAll; renderLines(); };
     box.append(more);
@@ -246,7 +308,7 @@ function drawBoxes() {
     const key = `${li}:${wi}`, box = (it.boxes[li] || [])[wi], cur = r.edits[key];
     if (!box) return;
     const cls = key === active ? 'active' : cur === '' ? 'deleted' : cur !== undefined ? 'fixed'
-              : it.conf[li][wi] < UNSURE ? 'unsure' : null;
+              : markOf(it, key) ? 'suspect' : it.conf[li][wi] < UNSURE ? 'unsure' : null;
     if (!cls) return;
     const p = document.createElementNS(SVG, 'polygon');
     p.setAttribute('points', box.join(' '));
@@ -254,7 +316,7 @@ function drawBoxes() {
     p.dataset.key = key;
     p.onclick = () => {
       const span = document.querySelector(`#lines [data-key="${key}"]`);
-      if (span) editWord(span, li, wi, w);
+      if (span) editWord(span.closest('.wc'), li, wi, w);
     };
     if (cls === 'active') top = p; else svg.append(p);
   }));
@@ -268,33 +330,57 @@ function setActive(key, scroll) {
   if (scroll && p) p.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+// One word, wrapped with its suggestion chip when it has a purple mark.
 function wordEl(li, wi, orig) {
-  const key = `${li}:${wi}`, cur = items[idx].review.edits[key];
-  const conf = items[idx].conf[li][wi];
-  const s = el('span', 'w');
+  const it = items[idx], key = `${li}:${wi}`, cur = it.review.edits[key];
+  const conf = it.conf[li][wi], mark = markOf(it, key), sure = Math.round(conf * 100);
+  const wrap = el('span', 'wc'), s = el('span', 'w');
   s.dataset.key = key;
   s.onmouseenter = () => setActive(key, false);
   s.onmouseleave = () => { if (document.activeElement !== s && active === key) setActive(null); };
   s.onfocus = () => setActive(key, true);
-  if (conf < UNSURE) {
+  if (conf < UNSURE || mark) {
     s.dataset.flag = '';
     s.tabIndex = 0;
     s.onkeydown = e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editWord(s, li, wi, orig); }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); editWord(wrap, li, wi, orig); }
     };
   }
-  if (cur === undefined) { s.textContent = orig; if (conf < UNSURE) s.classList.add('unsure'); }
-  else if (cur === '') { s.classList.add('deleted'); s.textContent = orig; }
+  if (cur === undefined) {
+    s.textContent = orig;
+    if (conf < UNSURE) s.classList.add('unsure');
+    if (mark) s.classList.add('suspect');
+  } else if (cur === '') { s.classList.add('deleted'); s.textContent = orig; }
   else { s.classList.add('fixed'); s.append(el('s', '', orig), cur); }
-  s.title = `Azure confidence ${Math.round(conf * 100)}% · click to correct`;
-  s.onclick = () => editWord(s, li, wi, orig);
-  return s;
+  s.title = mark ? `Suspicious: ${mark.why}. Azure ${sure}% sure.`
+                 : `Azure confidence ${sure}% · click to correct`;
+  s.onclick = () => editWord(wrap, li, wi, orig);
+  wrap.append(s);
+  if (mark) {
+    const chip = el('button', 'sug', mark.kind === 'fix' ? `→ ${mark.to}`
+                                     : mark.kind === 'drop' ? '→ delete' : '?');
+    chip.tabIndex = -1;  // Tab stays on words; Enter on a word opens its suggestion
+    chip.title = mark.kind === 'check' ? `Check it: ${mark.why}` : `Accept (${mark.why})`;
+    chip.onclick = e => {
+      e.stopPropagation();
+      if (mark.kind === 'check') return editWord(wrap, li, wi, orig);
+      it.review.edits[key] = mark.kind === 'fix' ? mark.to : '';
+      changed();
+      wrap.replaceWith(wordEl(li, wi, orig));
+      drawBoxes();
+    };
+    wrap.append(chip);
+  }
+  return wrap;
 }
 
 function editWord(span, li, wi, orig) {
-  const r = items[idx].review, key = `${li}:${wi}`;
+  const r = items[idx].review, key = `${li}:${wi}`, mark = markOf(items[idx], key);
   const inp = el('input', 'wedit');
-  inp.value = r.edits[key] ?? orig;
+  // A purple word opens with the suggestion filled in; Esc keeps the original.
+  inp.value = r.edits[key] ?? (mark?.kind === 'fix' ? mark.to : mark?.kind === 'drop' ? '' : orig);
+  inp.placeholder = '(delete)';
+  let typed = false;
   inp.size = Math.max(inp.value.length + 2, 6);
   span.replaceWith(inp);
   inp.focus(); inp.select();
@@ -313,24 +399,26 @@ function editWord(span, li, wi, orig) {
     const word = wordEl(li, wi, orig);
     inp.replaceWith(word);
     if (advance) {
-      // The next amber word after this one, even if this one was not amber.
+      // The next flagged word after this one, even if this one was not flagged.
       const next = [...document.querySelectorAll('#lines [data-flag]')]
-        .find(f => word.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING);
+        .find(f => !word.contains(f) && word.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING);
       (next || $('#missing')).focus();
-    } else if (refocus) word.focus();
+    } else if (refocus) word.querySelector('.w').focus();
     else setActive(null);
   };
-  inp.oninput = () => { inp.size = Math.max(inp.value.length + 2, 6); };
+  inp.oninput = () => { typed = true; inp.size = Math.max(inp.value.length + 2, 6); };
   inp.onkeydown = e => {
     if (e.key === 'Enter') { e.preventDefault(); finish(true, true); }
     if (e.key === 'Escape') finish(false, false, true);
   };
   // A click elsewhere keeps its own focus: refocusing the word here would pull
-  // focus out of the Missing words box mid-click.
-  inp.onblur = () => finish(true, false, false);
+  // focus out of the Missing words box mid-click. It only saves what was typed,
+  // so clicking away never quietly accepts a filled-in suggestion.
+  inp.onblur = () => finish(typed, false, false);
 }
 
 function changed() {
+  renderNav();
   clearTimeout(timer);
   $('#status').textContent = 'Unsaved…';
   timer = setTimeout(() => save(items[idx]), 400);
@@ -350,13 +438,13 @@ async function save(it) {
   }
 }
 
-// The next screenshot in direction dir (+1/-1) that is not done yet, so finished
-// ones are skipped; once everything is done, a plain step.
+// The next screenshot in direction dir (+1/-1) that still needs work (not done, or
+// done with unchecked purple flags); once nothing does, a plain step.
 function step(dir) {
   const n = items.length;
   for (let k = 1; k <= n; k++) {
     const j = (((idx + dir * k) % n) + n) % n;
-    if (!items[j].review.done) return j;
+    if (needsWork(items[j])) return j;
   }
   return (((idx + dir) % n) + n) % n;
 }
@@ -366,7 +454,9 @@ async function leave(target) {
   show(target);
 }
 
-$('#missing').oninput = () => { items[idx].review.missing = $('#missing').value; changed(); };
+$('#missing').oninput = () => {
+  items[idx].review.missing = $('#missing').value; changed(); renderSuggest();
+};
 $('#img').onclick = () => $('#stage').classList.toggle('actual');
 $('#img').onload = drawBoxes;
 $('#missing').onfocus = () => setActive(null);
@@ -379,9 +469,10 @@ $('#undone').onclick = async () => {
 };
 $('#done').onclick = async () => {
   items[idx].review.done = true;
+  items[idx].review.rechecked = true;  // purple flags looked at; it leaves "to re-check"
   await save(items[idx]);
   const order = [...items.keys()].map(k => (idx + 1 + k) % items.length);
-  const next = order.find(j => !items[j].review.done);
+  const next = order.find(j => needsWork(items[j]));
   if (next === undefined) {
     renderNav(); $('#main').hidden = true; $('#finished').hidden = false;
   } else show(next);

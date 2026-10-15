@@ -119,14 +119,22 @@ class Fixer:
         return core.isdigit() or (len(core) >= 2 and core in self.known)
 
     def word(self, text, conf, votes):
-        """(new text or None, change or None) for one Azure word."""
+        """(new text or None, change or None, mark or None) for one Azure word.
+
+        The mark is what ocr_review.py shows a reviewer: "fix" with a suggestion,
+        "drop", or "check" for a word kept as read that nothing else supports.
+        """
         cores = words(text)
         if not cores:  # pure symbols: "■", ">", "|"
-            return (text, None) if conf >= SURE else (None, ("dropped", text, "symbol"))
+            if conf >= SURE:
+                return text, None, None
+            return None, ("dropped", text, "symbol"), {"kind": "drop", "why": "a stray symbol"}
         if all(votes[c] or self.is_known(c) for c in cores):
-            return text, None
+            return text, None, None
+        unsupported = (f"no other engine read it and it isn't a known word "
+                       f"(Azure {conf:.0%} sure)")
         if conf >= SURE:
-            return text, None
+            return text, None, {"kind": "check", "why": unsupported}
         if len(cores) == 1 and len(cores[0]) >= 3:
             core = cores[0]
             alt, _ = closest(core, list(votes), limit(core))
@@ -134,17 +142,22 @@ class Fixer:
                 return self._swap(text, core, alt, f"read by {votes[alt]} other engine(s)")
             alt, _ = closest(core, self.domain, limit(core))
             if alt:
-                return self._swap(text, core, alt, "KB articles")
+                return self._swap(text, core, alt, "used in the KB articles")
         if conf < DROP_BELOW:
-            return None, ("dropped", text, f"unknown, unsupported, Azure {conf:.0%} sure")
-        return text, None
+            return (None, ("dropped", text, f"unknown, unsupported, Azure {conf:.0%} sure"),
+                    {"kind": "drop", "why": unsupported})
+        return text, None, {"kind": "check", "why": unsupported}
 
     def _swap(self, text, core, alt, why):
         new = replace_core(text, core, self.forms.get(alt, alt))
-        return new, ("fixed", text, new, why)
+        return new, ("fixed", text, new, why), {"kind": "fix", "to": new, "why": why}
 
     def screenshot(self, base_row, voter_texts):
-        """Silver text for one screenshot, and the list of changes made."""
+        """(silver text, changes, votes, marks, added) for one screenshot.
+
+        marks are keyed "line:word" in the same numbering ocr_review.py uses:
+        Azure's lines in order, words in order within each line.
+        """
         votes, order, self.forms = Counter(), [], {}
         for text in voter_texts:
             cores = words(text)
@@ -156,19 +169,25 @@ class Fixer:
         for s in base_row["segments"]:
             lines[s["line"]].append((s["text"], s["conf"]))
 
-        out, log = [], []
-        for n in sorted(lines):
-            kept = []
-            for text, conf in lines[n]:
-                new, change = self.word(text, conf, votes)
+        out, log, marks = [], [], {}
+        for li, n in enumerate(sorted(lines)):
+            kept, kept_at = [], []
+            for wi, (text, conf) in enumerate(lines[n]):
+                new, change, mark = self.word(text, conf, votes)
                 if change:
                     log.append(change)
+                if mark:
+                    marks[f"{li}:{wi}"] = mark
                 if new:
                     kept.append(new)
+                    kept_at.append(wi)
             cores = words(" ".join(kept))
             # Nothing but stray characters that no other engine saw: "X", ">", "0 :"
             if kept and all(len(c) < 2 for c in cores) and not any(votes[c] for c in cores):
                 log.append(("dropped", " ".join(kept), "stray characters"))
+                for wi in kept_at:
+                    marks[f"{li}:{wi}"] = {"kind": "drop", "why": "stray characters no "
+                                           "other engine read (window buttons, icons)"}
                 continue
             if kept:
                 out.append(" ".join(kept))
@@ -185,7 +204,27 @@ class Fixer:
         if added:
             out.append(" ".join(added))
             log.append(("added", " ".join(added), "other engines agree"))
-        return "\n".join(out), log, votes
+        return "\n".join(out), log, votes, marks, added
+
+
+def load_voters():
+    """[(label, rows, min conf)] for the engines that have runs."""
+    voters = []
+    for label, run, mc in VOTERS:
+        path = BASELINE if run is None else os.path.join(BENCH, run, "ocr.json")
+        if os.path.exists(path):
+            voters.append((label, load_rows(path), mc))
+        else:
+            print(f"note: no {run} run, voting without {label}")
+    return voters
+
+
+def voter_texts(voters, key):
+    texts = []
+    for _, rows, mc in voters:
+        r = rows.get(key, {})
+        texts.append(join_lines(r["segments"], mc) if "segments" in r else r.get("text") or "")
+    return texts
 
 
 def word_match(texts, gold):
@@ -205,13 +244,7 @@ def pct(a, b):
 
 def main():
     base = load_rows(os.path.join(BENCH, BASE_RUN, "ocr.json"))
-    voters = []
-    for label, run, mc in VOTERS:
-        path = BASELINE if run is None else os.path.join(BENCH, run, "ocr.json")
-        if os.path.exists(path):
-            voters.append((label, load_rows(path), mc))
-        else:
-            print(f"note: no {run} run, voting without {label}")
+    voters = load_voters()
     fixer = Fixer()
     images = [(d, os.path.basename(p)) for d, p in list_images()]
 
@@ -219,11 +252,8 @@ def main():
     reads = {v[0]: 0 for v in voters}
     only_azure = Counter()
     for key in images:
-        texts = []
-        for label, rows, mc in voters:
-            r = rows.get(key, {})
-            texts.append(join_lines(r["segments"], mc) if "segments" in r else r.get("text") or "")
-        silver[key], logs[key], votes = fixer.screenshot(base[key], texts)
+        texts = voter_texts(voters, key)
+        silver[key], logs[key], votes, _, _ = fixer.screenshot(base[key], texts)
         final = words(silver[key])
         for c in final:
             agree[votes[c]] += 1

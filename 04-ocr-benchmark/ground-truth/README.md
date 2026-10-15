@@ -16,6 +16,12 @@ unless you change it:
   are shown; the rest collapse and count as correct. Tab jumps between amber words, Enter
   opens one, Enter again saves it and moves on. At 80% the flags caught 12 of 13 Azure
   errors found so far; confident mistakes ("stanes" for "status", 94%) need "Show all".
+- **Purple words** are ones the cross-engine cleanup (`ocr_autotruth.py`) thinks are wrong,
+  with its suggestion in a chip beside them: `→ will` or `→ delete` (click to accept) or `?`
+  (no suggestion, just check). Enter on a purple word opens it with the suggestion filled in;
+  Esc keeps the original. Words other engines agree Azure missed appear as `+ word` chips
+  above Missing words. Finished screenshots with purple flags nobody has looked at show as
+  "To re-check" (◐) and come back in Prev/Next until Done is pressed on them again.
 - **Click a wrong word** and type the right one. Enter saves, Esc cancels, an empty box
   deletes the word.
 - **✕** strikes a whole line that isn't on the screen.

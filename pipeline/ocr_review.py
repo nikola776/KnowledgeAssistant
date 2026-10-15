@@ -3,7 +3,11 @@ OCR review: correct Azure's reading of the screenshots in the browser and
 save the result as ground truth for `ocr_bench.py compare`.
 
 Every word Azure read starts out correct. Click a wrong word to fix or delete it,
-strike lines that are not on the screen, and add words Azure missed. When a
+strike lines that are not on the screen, and add words Azure missed. Two kinds of
+flag point at words worth checking: amber where Azure itself was unsure, purple
+where ocr_autotruth.py's cross-engine cleanup thinks a word is wrong (with its
+suggestion). Finished screenshots that still have purple flags nobody has looked
+at come back as "to re-check". When a
 screenshot is marked done, its corrected text is written to
 04-ocr-benchmark/ground-truth/<doc_id>/<image basename>.txt, and compare scores
 every engine against it.
@@ -22,10 +26,12 @@ Run:  python pipeline/ocr_review.py
 import argparse
 import json
 import os
+import re
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from ocr_autotruth import Fixer, load_voters, voter_texts
 from ocr_bench import BASELINE, BENCH, IMAGES, join_lines, list_images, load_rows, write_json
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -46,6 +52,22 @@ ALL = [(doc_id, os.path.basename(path)) for doc_id, path in list_images()]
 KNOWN = set(ALL)
 
 lock = threading.Lock()
+_suspicions = None
+
+
+def suspicions(base):
+    """item id -> (purple marks, words other engines agree Azure missed), computed once.
+
+    Lone symbols ("■", "|") are left out: they do not affect word scores, and a
+    page full of them would bury the marks that matter.
+    """
+    global _suspicions
+    if _suspicions is None:
+        fixer, voters, _suspicions = Fixer(), load_voters(), {}
+        for key in ALL:
+            _, _, _, marks, added = fixer.screenshot(base[key], voter_texts(voters, key))
+            _suspicions["/".join(key)] = (marks, added)
+    return _suspicions
 
 
 def load_review():
@@ -67,6 +89,7 @@ def items():
                          f"run `python pipeline/ocr_bench.py run azure` first")
     hints = [(label, run_rows(name), mc) for label, name, mc in HINT_RUNS]
     review = load_review()
+    flagged = suspicions(base)
     out = []
     for key in ALL:
         lines, confs, boxes = {}, {}, {}
@@ -75,11 +98,16 @@ def items():
             confs.setdefault(s["line"], []).append(s["conf"])
             boxes.setdefault(s["line"], []).append(s.get("box"))
         item_id = "/".join(key)
+        marks, added = flagged[item_id]
+        word_at = {f"{li}:{wi}": w for li, n in enumerate(sorted(lines))
+                   for wi, w in enumerate(lines[n])}
         out.append({
             "id": item_id,
             "lines": [lines[n] for n in sorted(lines)],
             "conf": [confs[n] for n in sorted(confs)],  # per word, for flagging
             "boxes": [boxes[n] for n in sorted(boxes)],  # per word outline, image pixels
+            "marks": {k: m for k, m in marks.items() if re.search(r"[A-Za-z0-9]", word_at[k])},
+            "suggest": added,
             "hints": [{"name": label, "text": join_lines(rows[key].get("segments", []), mc)
                        if "segments" in rows[key] else rows[key].get("text", "")}
                       for label, rows, mc in hints if rows and key in rows],
