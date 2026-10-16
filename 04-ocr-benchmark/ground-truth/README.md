@@ -48,6 +48,9 @@ To transcribe by hand instead, or to add screenshots outside the sample:
 - One on-screen line per line, in logical reading order.
 - Every readable label, button and menu item, not just the relevant ones.
 - Leave out text you cannot read rather than guessing.
+- Leave out icons that are not text: window buttons (`- □ X`), `■`, `▼`, `>` chevrons, `⋮`.
+  Keep single characters that are real text: badge counts, step numbers, letters in labels.
+  `compare` counts single characters as words, so this has to be the same everywhere.
 - **An empty file means the image has no readable text.** These score how much noise an
   engine invents.
 
