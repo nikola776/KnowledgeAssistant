@@ -129,29 +129,35 @@ See `report.md` for the current table.
   67 min for the set on the RTX 2080 (median 33 s per image). Two dense NVIDIA panels
   (sol-386 obj0019, obj0021) looped until the 4096-token cap, at 10 min each.
 
-## First accuracy scores (2026-10-15, 16 labelled screenshots)
+## Accuracy (2026-10-16, all 67 screenshots hand-labelled)
 
-From `ocr_review.py`, against the first 16 screenshots marked done: the easier ones, two
-of them blank. Word precision is how many words an engine read are right; recall is how
-many words on screen it found.
+Against the hand labels from `ocr_review.py`: all 67 screenshots, two of them blank, 249
+corrections to Azure's reading. Word precision is how many words an engine read are right;
+recall is how many words on screen it found. Full table in `report.md`.
 
-| Engine | Word precision | Word recall | CER |
+| Engine | Word precision | Word recall | Time for 67 |
 |---|---|---|---|
-| Azure prebuilt-read | 98% | 99% | 1% |
-| Unlimited-OCR base | 92% | 83% | 24% |
-| Windows | 97% | 81% | 32% |
-| Tesseract x2 | 87% | 77% | 31% |
-| EasyOCR | 90% | 76% | 35% |
+| **Azure prebuilt-read** | 96% | **98%** | 30 s |
+| Windows (current corpus) | 96% | 69% | – |
+| Tesseract x2 | 85% | 69% | 12 s |
+| EasyOCR | 82% | 68% | 3.7 min |
+| Unlimited-OCR base | 90% | 67% | 67 min (RTX 2080) |
+| Tesseract default | 86% | 59% | 7 s |
 
-- **Azure's row is inflated by construction.** The ground truth starts from Azure's text and
-  only its unsure words were checked, so any confident Azure mistake counts as correct, and
-  its line order is the reference (hence a 1% CER). Read it as "very good", not 98/99.
-- **Windows is precise but misses a fifth of the words**, even on the easy screens. The
-  blurry screenshots still to be labelled are where it found nothing, so its recall will fall.
-- Unlimited-OCR finds slightly more than Windows but makes more mistakes, at roughly 100x
-  Azure's time on this GPU. Tesseract and EasyOCR trail on both measures.
-- CER and WER penalise reading order, which differs by engine on multi-column screens; word
-  precision and recall ignore order and are the fairer comparison.
+- **Azure finds nearly every word; Windows misses almost a third**, at the same precision.
+  The gap is the blurry and small screenshots, where Windows returned nothing.
+- Azure's numbers lean optimistic: the labels start from its text, so a confident Azure
+  mistake the reviewer did not notice counts as correct. The flags made that unlikely but not
+  impossible. Its lead is far too large for this to change the ranking.
+- Unlimited-OCR reads clean screens well but, on this GPU, is no better than Windows overall
+  and 130x slower than Azure. Tesseract and EasyOCR trail on precision.
+- CER and WER penalise reading order, which differs by engine on multi-column screens;
+  precision and recall ignore order and are the fair comparison.
+- The automatic ground truth was validated by the hand labels: it lifts Azure's raw text
+  from 95.5% to 98.0% precision, and 86% of its corrections and 90% of its deletions agree
+  with the reviewer.
+- A few icon glyphs (`X`) may remain in the labels despite the convention below. Under 0.2%
+  of words, too few to move any score.
 
 ## Automatic ground truth (backup)
 
