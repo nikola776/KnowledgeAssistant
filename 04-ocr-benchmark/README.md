@@ -132,17 +132,23 @@ See `report.md` for the current table.
 ## Accuracy (2026-10-16, all 67 screenshots hand-labelled)
 
 Against the hand labels from `ocr_review.py`: all 67 screenshots, two of them blank, 249
-corrections to Azure's reading. Word precision is how many words an engine read are right;
-recall is how many words on screen it found. Full table in `report.md`.
+corrections to Azure's reading. Each model at its default settings; every variant is in
+`report.md`.
 
-| Engine | Word precision | Word recall | Time for 67 |
-|---|---|---|---|
-| **Azure prebuilt-read** | 96% | **98%** | 30 s |
-| Windows (current corpus) | 96% | 69% | – |
-| Tesseract x2 | 85% | 69% | 12 s |
-| EasyOCR | 82% | 68% | 3.7 min |
-| Unlimited-OCR base | 90% | 67% | 67 min (RTX 2080) |
-| Tesseract default | 86% | 59% | 7 s |
+| # | Model | Words read correctly | Words found | Overall |
+|---|---|---|---|---|
+| 1 | **Azure Document Intelligence** | 96% | **98%** | **97%** |
+| 2 | Windows OCR (current) | 96% | 69% | 80% |
+| 3 | Unlimited-OCR | 90% | 67% | 77% |
+| 4 | EasyOCR | 82% | 68% | 74% |
+| 5 | Tesseract | 86% | 59% | 70% |
+
+- **Words read correctly:** of the words a model read, how many were right (precision).
+- **Words found:** of the words on screen, how many it picked up (recall).
+- **Overall:** both combined into one score (F1), which sets the order.
+
+Time for all 67: Azure 30 s, Tesseract 7 s, EasyOCR 3.7 min on CPU, Unlimited-OCR 67 min on
+the RTX 2080. Enlarging images 2x lifts Tesseract to 69% found (74% overall), still 4th.
 
 - **Azure finds nearly every word; Windows misses almost a third**, at the same precision.
   The gap is the blurry and small screenshots, where Windows returned nothing.

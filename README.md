@@ -246,15 +246,30 @@ string comparison.
 the underlying vendor guides exist, they beat OCR of a screenshot of a guide, and they would
 also fix the four still-thin articles.
 
-## OCR benchmark (2026-10-14)
+## OCR benchmark (2026-10-16)
 
-Ahead of evaluating Azure AI Document Intelligence, `pipeline/ocr_bench.py` runs Tesseract
-and EasyOCR over the same 67 screenshots and scores them against the Windows output. Results
-and how to run it are in `04-ocr-benchmark/README.md`.
+`pipeline/ocr_bench.py` runs five OCR models over the 67 screenshots and scores them against
+a hand-labelled transcription of every one (built with `pipeline/ocr_review.py`):
 
-No engine is clearly better yet, and the benchmark cannot say so until someone transcribes
-15 to 20 screenshots by hand into `04-ocr-benchmark/ground-truth/`. Without that it measures
-agreement with Windows, not accuracy. Retrieval is unaffected: `normalise.py` still reads
+| # | Model | Words read correctly | Words found | Overall |
+|---|---|---|---|---|
+| 1 | **Azure Document Intelligence** | 96% | **98%** | **97%** |
+| 2 | Windows OCR (current) | 96% | 69% | 80% |
+| 3 | Unlimited-OCR | 90% | 67% | 77% |
+| 4 | EasyOCR | 82% | 68% | 74% |
+| 5 | Tesseract | 86% | 59% | 70% |
+
+- **Words read correctly:** of the words a model read, how many were right (precision).
+- **Words found:** of the words on screen, how many it picked up (recall).
+- **Overall:** both combined into one score (F1), which sets the order.
+
+Azure finds nearly every word; the Windows OCR this corpus was built with misses almost a
+third, nearly all of it on blurry or small screenshots where it returned nothing. Azure's
+figures lean slightly optimistic, since the labels started from its text, but not by enough
+to change the order. Details, running it and the data handling are in
+`04-ocr-benchmark/README.md`.
+
+Retrieval is unaffected so far: `normalise.py` still reads the Windows output in
 `01-ocr/ocr.json`.
 
 ## Open questions
