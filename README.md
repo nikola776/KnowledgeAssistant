@@ -7,6 +7,76 @@ IOS tickets.
 Deliberately **outside** the Obsidian vault. The vault schema forbids patient or customer
 data, and the ticket corpus will contain practice names and patient-adjacent detail.
 
+## Setting up on a new machine
+
+Git holds only the code and docs. The corpus, screenshots and OCR text are internal support
+material, and the screenshots are unredacted, so `.gitignore` keeps all of it out. A fresh
+clone can't answer anything until the corpus is added.
+
+### 1. Add the corpus from `IOS-RAG.zip`
+
+`IOS-RAG.zip` is a snapshot of the whole project folder from 2026-09-21. Copy only its data
+folders into the clone. Its `README.md`, `CLAUDE.md` and `pipeline/` are older than the
+repo's, so leave those out.
+
+```bash
+unzip -q IOS-RAG.zip -d /tmp/ios-rag
+chmod -R u+w /tmp/ios-rag   # the archive stores its folders read-only
+for p in 00-intake 01-normalised 01-ocr 02-index 03-chatbot-upload result.html; do
+  cp -r "/tmp/ios-rag/IOS-RAG/$p" .
+done
+git status --short          # prints nothing: all of it is ignored
+python3 pipeline/query.py "how do I calibrate a scanner" --n 2 --shots 3   # smoke test
+rm -rf /tmp/ios-rag
+```
+
+Never commit these folders.
+
+The zip predates the OCR benchmark. It doesn't contain the per-engine run folders
+(`04-ocr-benchmark/<run>/`) or the hand-labelled transcriptions
+(`04-ocr-benchmark/ground-truth/<doc_id>/`). Without them, `ocr_bench.py compare` and the
+scores in [OCR benchmark](#ocr-benchmark-2026-10-16) can't be reproduced. Answering
+questions doesn't need them.
+
+### 2. Create `.env` (Azure OCR only)
+
+Only `pipeline/ocr_bench.py run azure` reads it. Keep comments on their own line: the
+loader doesn't strip text after a value.
+
+```
+AZURE_DI_ENDPOINT=https://di-mydentist-ai-uks.cognitiveservices.azure.com/
+AZURE_DI_TENANT=29d4f8a4-6bc4-4032-b2c1-5ed82e97e377
+# Only for a resource that allows API keys. mydentist's doesn't.
+# AZURE_DI_KEY=
+```
+
+### 3. Set up the Azure CLI (Azure OCR only)
+
+mydentist's resource disables API keys, so the azure engine signs in with a Microsoft Entra
+token from the Azure CLI.
+
+```bash
+pipx install azure-cli        # Linux. Windows: winget install --exact --id Microsoft.AzureCLI
+az login --tenant mydentist.co.uk
+```
+
+The account needs the **Cognitive Services User** role on `di-mydentist-ai-uks`. Owner or
+Contributor alone gets 401/403.
+
+### What each task needs
+
+| Task | Needs |
+|---|---|
+| Answering questions (`query.py`) | Python 3, standard library only, any OS. The corpus from step 1 |
+| OCR benchmark: `tesseract`, `easyocr` | `tesseract` on PATH, or `pip install easyocr` (PyTorch). `--scale` needs Pillow |
+| OCR benchmark: `azure` | Steps 2 and 3 |
+| OCR benchmark: `unlimited-ocr` | NVIDIA GPU, Python 3.12, `pipeline/requirements-unlimited-ocr.txt` |
+| Rebuilding the corpus from new PDFs | Windows: Xpdf's `pdftotext` from Git for Windows (path set in `PDFTOTEXT` in `normalise.py` and `anchor_images.py`), and the Windows OCR engine for `ocr.ps1` |
+
+The rebuild doesn't run on Linux as-is. Its `pdftotext` is Poppler's, which has no
+`-marginl`/`-marginr`, and `ocr.ps1` uses `Windows.Media.Ocr`. It's only needed when new
+articles are added.
+
 ## Source
 
 ManageEngine ServiceDesk Plus (Enterprise Service Management edition), not SharePoint.
