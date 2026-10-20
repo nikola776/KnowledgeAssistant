@@ -165,6 +165,67 @@ the RTX 2080. Enlarging images 2x lifts Tesseract to 69% found (74% overall), st
 - A few icon glyphs (`X`) may remain in the labels despite the convention below. Under 0.2%
   of words, too few to move any score.
 
+## Flagging a bad reading (2026-10-19, proposed)
+
+Azure gives every word a confidence from 0 to 1. These rules decide whether a screenshot was
+read well enough to index or needs a person to check it:
+
+1. Judge each screenshot, or each page of a scanned document, on its own, not the whole file.
+2. Score = mean confidence of all the words Azure returns for it.
+3. Fewer than 10 words: accept. The mean of a few words is noise (a logo alone scores 0.41).
+4. No words: accept as "no text". These are product photos (sol-403 obj0017 and obj0053).
+5. Mean below **0.70**: flag it for a person to check. Until then, leave its OCR text out of
+   the index, but keep the article and the image.
+6. Mean 0.70 or above: accept with all its words, low-confidence ones included.
+7. Flag a whole file only when OCR is its only text and any page is flagged.
+8. With a flag, report the median text height in pixels, from Azure's word boxes. Under
+   9 px, the message is "text too small, capture the screenshot at full size".
+
+Why these numbers, from the `azure-read` run of 2026-10-19 (4,069 words, the same character
+count as the 2026-10-15 run):
+
+- **Word confidence is lopsided.** 66% of words score 0.99 or more and 15% score below 0.8.
+  A typical screenshot averages 0.95; the low tail is the blurry and tiny screenshots in
+  sol-391, 395, 403 and 441.
+- **Confidence undersells the middle.** Of the words of three or more letters, the share
+  that are dictionary or KB words (an upper bound on correct) is 98% at 0.95 and above, about
+  87% between 0.6 and 0.8, and about 70% below 0.5. A word Azure scores 0.65 is usually right.
+- **0.70 sits in a gap.** No screenshot with 10 or more words averages between 0.61 and 0.76,
+  so small shifts in Azure's scores don't change any decision. Screenshots flagged:
+
+  | Mean below | Flagged |
+  |---|---|
+  | 0.65 to 0.75 | 4 |
+  | 0.80 | 10 |
+  | 0.85 | 15 |
+
+  The 4 below 0.70 (sol-395 obj0015 and obj0017, sol-441 obj0022 and obj0023) are barely
+  legible to a person, and half of Azure's text for them is garbage. 0.80 would add 6 that
+  Azure read mostly correctly, among them sol-403 obj0018, the Scanner Management screen
+  (mean 0.78), where Windows OCR read 18 characters.
+- **The plain mean is enough.** Weighting words by length, or counting the share below 0.5,
+  flags the same 4 screenshots.
+- **Text height explains a flag but can't decide one.** The 4 flagged screenshots have
+  text 7 to 8 px tall (median word box height); every screenshot averaging 0.85 or more has
+  at least 9 px, typically 17. But some good readings also have 7 to 8 px text (sol-403
+  obj0018 and obj0052), so height alone would flag them.
+- **Keep low-confidence words in accepted screenshots.** Dropping words below 0.5 costs 2
+  points of recall for 1 of precision (`azure-read conf>=0.5` in `report.md`).
+- **Don't flag the middle band.** The 11 screenshots between 0.70 and 0.85 are
+  blurry but mostly right, and a few wrong words do little harm in a search index. That
+  changes only if OCR text is ever shown to users word for word.
+
+Limits:
+
+- Not yet checked against the hand labels, which weren't on the machine this ran on. The
+  next step is each screenshot's real word accuracy against `ground-truth/` next to its mean,
+  for example flagging below 80% correct.
+- It catches unreadable screenshots, not confident mistakes: Azure reads "status" as
+  "stanes" at over 0.9.
+- Valid for `prebuilt-read`, API 2024-11-30. Check again if the model changes.
+- The figures were computed from `azure-read/ocr.json` (each word's `conf` and `box`) by a
+  one-off script; `ocr_bench.py` doesn't report them.
+
 ## Automatic ground truth (backup)
 
 `python pipeline/ocr_autotruth.py` builds a machine-made ("silver") ground truth for all 67

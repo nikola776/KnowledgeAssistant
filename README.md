@@ -342,6 +342,23 @@ to change the order. Details, running it and the data handling are in
 Retrieval is unaffected so far: `normalise.py` still reads the Windows output in
 `01-ocr/ocr.json`.
 
+### Flagging a bad reading (proposed)
+
+Azure gives every word a confidence from 0 to 1. Per screenshot, or per page of a scanned
+document:
+
+- Fewer than 10 words, or none: accept.
+- Mean word confidence below **0.70**: flag it for a person to check. Until then, leave its
+  OCR text out of the index, but keep the article and the image. A whole file is flagged
+  only when OCR is its only text.
+- Otherwise accept, with all its words.
+- With a flag, report the median text height in pixels. Under 9 px: "text too small,
+  capture the screenshot at full size".
+
+On the 67 screenshots this flags 4, all barely legible to a person. 0.80 would also
+flag 6 that Azure read mostly correctly. Not yet checked against the hand labels. The
+evidence and limits are in `04-ocr-benchmark/README.md`.
+
 ## Open questions
 
 - Is a technician API key obtainable? It removes almost all of the manual effort.
